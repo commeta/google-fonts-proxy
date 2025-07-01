@@ -20,7 +20,6 @@ class GoogleFontsProxy {
     private $maxCacheAge = 86400 * 365; // 24 часа * 365 суток
     private $maxExecutionTime = 30;  // Максимальное время выполнения
     
-    const LOCK_TIMEOUT = 30; // Таймаут для блокировок
     const TEMP_FILE_PREFIX = '.tmp_'; // Префикс временных файлов
     const LOCK_FILE_PREFIX = '.lock_'; // Префикс файлов-блокировок
     
@@ -172,26 +171,7 @@ class GoogleFontsProxy {
             throw new Exception('Поврежденный файл кэша');
         }
     }
-    
-    /**
-     * Быстрая генерация ключа кэша без полной обработки URL
-     */
-    private function generateCacheKeyFast($params) {
-        // Сортируем параметры для консистентности
-        ksort($params);
-        $paramsString = http_build_query($params);
         
-        // Используем нормализованные данные для кэша
-        $normalizedUA = $this->normalizeUserAgent(
-            isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
-        );
-        
-        // Добавляем информацию о формате шрифта для уникальности
-        $fontFormat = $this->detectFontExtension();
-        
-        return md5($paramsString . $normalizedUA . $fontFormat . $this->getAcceptLanguage());
-    }
-    
     /**
      * валидация параметров с поддержкой всех v2 форматов
      */
@@ -323,15 +303,7 @@ class GoogleFontsProxy {
         
         return md5($googleUrl . $normalizedUA . $fontFormat . $this->getAcceptLanguage());
     }
-    
-    private function isCacheValid($cacheFile) {
-        // Используем stat вместо отдельных file_exists и filemtime
-        $stat = @stat($cacheFile);
-        return $stat !== false && 
-               is_readable($cacheFile) && 
-               (time() - $stat['mtime']) < $this->maxCacheAge;
-    }
-    
+       
     private function fetchGoogleCSS($url) {
         if (function_exists('curl_init')) {
             return $this->fetchWithCurl($url);
@@ -486,7 +458,6 @@ class GoogleFontsProxy {
         foreach ($fontUrls as $fontUrl) {
             try {
                 $localUrl = $this->processFontSafe($fontUrl);
-                // if ($localUrl && $this->validateLocalUrl($localUrl)) {
                 if ($localUrl) {
                     $replacements[$fontUrl] = $localUrl;
                 } else {
@@ -502,26 +473,7 @@ class GoogleFontsProxy {
         
         return $css;
     }
-    
-    /**
-     * Пакетная проверка существования файлов шрифтов
-     */
-    private function batchCheckFonts($fontUrls) {
-        foreach ($fontUrls as $fontUrl) {
-            $fileName = $this->generateFontFileName($fontUrl);
-            $localPath = $this->fontsDir . $fileName;
-            
-            // Кэшируем информацию о файлах в памяти
-            if (!isset(self::$memoryCache['fontExists'][$fileName])) {
-                $stat = @stat($localPath);
-                self::$memoryCache['fontExists'][$fileName] = $stat !== false;
-                if ($stat !== false) {
-                    self::$memoryCache['fontMtime'][$fileName] = $stat['mtime'];
-                }
-            }
-        }
-    }
-    
+        
     private function replaceUrlsInCSS($css, $replacements) {
         // Используем эффективную замену
         foreach ($replacements as $oldUrl => $newUrl) {
@@ -876,17 +828,7 @@ class GoogleFontsProxy {
         
         return implode("\n", $fallback);
     }
-    
-    /**
-     * Нормализует User-Agent для кэширования
-     */
-    private function getUserAgent() {
-        $userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-        
-        return $this->normalizeUserAgent($userAgent);
-    }
-    
+       
     /**
      * Нормализует User-Agent для единого кэширования современных браузеров
      */
@@ -1016,19 +958,6 @@ class GoogleFontsProxy {
         return $cleared;
     }
     
-    private function validateLocalUrl($url) {
-        $urlWithoutProtocol = preg_replace('/^https?:\/\//', '', $url);
-        if (strpos($urlWithoutProtocol, '//') !== false) {
-            return false;
-        }
-        
-        $parsed = parse_url($url);
-        if (!$parsed || empty($parsed['scheme']) || empty($parsed['host'])) {
-            return false;
-        }
-        
-        return true;
-    }
     
     /**
      * Метод для отладки производительности

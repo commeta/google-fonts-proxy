@@ -175,6 +175,7 @@ curl "https://yourdomain.com/fonts-proxy.php?action=cache_stats"
 const CACHE_CSS_DIR = 'cache/css/';     // Кастомный путь для кеша CSS
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
+const ADMIN_ACTIONS = false;            // Административные команды
 ```
 
 Вы можете изменить следующие параметры в классе `GoogleFontsProxy`:

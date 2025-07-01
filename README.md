@@ -123,23 +123,24 @@ curl "https://yourdomain.com/fonts-proxy.php?action=debug_performance"
 Пример ответа:
 ```json
 {
-    "memory_cache_size": 47,
+    "memory_cache_size": 3,
     "memory_usage": 2097152,
-    "memory_peak": 2359296,
+    "memory_peak": 2097152,
     "cache_dir_exists": true,
     "fonts_dir_exists": true,
-    "css_cache_files": 12,
-    "font_cache_files": 48,
+    "css_cache_files": 1,
+    "font_cache_files": 63,
     "cache_normalization": "enabled",
     "user_agent_normalized": "Mozilla/5.0 Modern Browser (woff2 support)",
     "detected_font_format": "woff2",
     "cache_stats": {
-        "css_files": 12,
-        "font_files": 48,
-        "total_size": 1048576,
-        "total_size_mb": 1.0,
-        "modern_browser_ratio": 0,
-        "cache_efficiency": "improved"
+        "css_files": 1,
+        "font_files": 63,
+        "total_size": 1814126,
+        "cache_efficiency": "improved",
+        "api_v2_support": true,
+        "total_size_mb": 1.73,
+        "cache_hit_ratio": 100
     }
 }
 ```
@@ -153,12 +154,13 @@ curl "https://yourdomain.com/fonts-proxy.php?action=cache_stats"
 Пример ответа:
 ```json
 {
-    "css_files": 12,
-    "font_files": 48,
-    "total_size": 1048576,
-    "total_size_mb": 1.0,
-    "modern_browser_ratio": 0,
-    "cache_efficiency": "improved"
+    "css_files": 1,
+    "font_files": 63,
+    "total_size": 1814126,
+    "cache_efficiency": "improved",
+    "api_v2_support": true,
+    "total_size_mb": 1.73,
+    "cache_hit_ratio": 100
 }
 ```
 

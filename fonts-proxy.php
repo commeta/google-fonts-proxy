@@ -12,6 +12,7 @@ const CACHE_CSS_DIR = 'cache/css/'; // Кастомный путь для кеш
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
 const ADMIN_ACTIONS = false; // Административные команды
+const MAX_PARALLEL = 32; // Максимум одновременных соединений
 
 class GoogleFontsProxy {
     private $cacheDir;
@@ -34,6 +35,8 @@ class GoogleFontsProxy {
     private static $legacyBrowsers = [
         'ie', 'trident'
     ];
+    
+    private static $fileValidationCache = [];
     
     public function __construct() {
         // Директории для кэша с использованием констант
@@ -452,28 +455,251 @@ class GoogleFontsProxy {
             return $css;
         }
         
-        $replacements = [];
-        
-        // Обрабатываем шрифты с защитой от race conditions
-        foreach ($fontUrls as $fontUrl) {
-            try {
-                $localUrl = $this->processFontSafe($fontUrl);
-                if ($localUrl) {
-                    $replacements[$fontUrl] = $localUrl;
-                } else {
-                    error_log('Сформирован некорректный локальный URL: ' . $localUrl);
-                }
-            } catch (Exception $e) {
-                error_log('Ошибка обработки шрифта ' . $fontUrl . ': ' . $e->getMessage());
-            }
-        }
+        // НОВАЯ ЛОГИКА: Параллельная обработка шрифтов
+        $replacements = $this->processFontsParallel($fontUrls);
         
         $css = $this->replaceUrlsInCSS($css, $replacements);
         $css = $this->addCSSMetadata($css, count($replacements));
         
         return $css;
     }
+
+    /**
+     * Параллельная обработка множественных шрифтов
+     * Использует cURL Multi для одновременной загрузки + существующую систему блокировок
+     */
+    private function processFontsParallel($fontUrls) {
+        $replacements = [];
+        $downloadQueue = [];
+        $existingFonts = [];
         
+        // Этап 1: Быстрая проверка существующих файлов и подготовка к загрузке
+        foreach ($fontUrls as $fontUrl) {
+            try {
+                $fileName = $this->generateFontFileName($fontUrl);
+                $localPath = $this->fontsDir . $fileName;
+                $fontPath = FONTS_WEB_PATH . $fileName;
+                $localUrl = $fontPath;
+                
+                // Проверяем существование без блокировки (быстро)
+                if ($this->isFileValidAndFresh($localPath)) {
+                    $replacements[$fontUrl] = $localUrl;
+                    $existingFonts[] = $fontUrl;
+                    continue;
+                }
+                
+                // Добавляем в очередь загрузки
+                $downloadQueue[$fontUrl] = [
+                    'fileName' => $fileName,
+                    'localPath' => $localPath,
+                    'localUrl' => $localUrl,
+                    'lockFile' => $this->fontsDir . self::LOCK_FILE_PREFIX . $fileName
+                ];
+                
+            } catch (Exception $e) {
+                error_log('Ошибка подготовки шрифта ' . $fontUrl . ': ' . $e->getMessage());
+            }
+        }
+        
+        // Этап 2: Получение блокировок для файлов, требующих загрузки
+        $lockedDownloads = [];
+        $lockHandles = [];
+        
+        foreach ($downloadQueue as $fontUrl => $fontData) {
+            // Повторная проверка после подготовки очереди
+            if ($this->isFileValidAndFresh($fontData['localPath'])) {
+                $replacements[$fontUrl] = $fontData['localUrl'];
+                continue;
+            }
+            
+            // Пытаемся получить блокировку
+            $lockHandle = $this->acquireExclusiveLock($fontData['lockFile']);
+            if ($lockHandle) {
+                // Третья проверка после получения блокировки
+                if ($this->isFileValidAndFresh($fontData['localPath'])) {
+                    $replacements[$fontUrl] = $fontData['localUrl'];
+                    $this->releaseLock($lockHandle, $fontData['lockFile']);
+                    continue;
+                }
+                
+                $lockHandles[$fontUrl] = $lockHandle;
+                $lockedDownloads[$fontUrl] = $fontData;
+            } else {
+                // Если не удалось получить блокировку, возможно файл уже загружается
+                // Последняя попытка проверить файл
+                if ($this->isFileValidAndFresh($fontData['localPath'])) {
+                    $replacements[$fontUrl] = $fontData['localUrl'];
+                } else {
+                    error_log('Не удалось получить блокировку для шрифта: ' . $fontUrl);
+                }
+            }
+        }
+        
+        // Этап 3: Параллельная загрузка заблокированных файлов
+        if (!empty($lockedDownloads)) {
+            try {
+                $downloadResults = $this->downloadFontsParallel($lockedDownloads);
+                
+                foreach ($downloadResults as $fontUrl => $success) {
+                    if ($success && isset($lockedDownloads[$fontUrl])) {
+                        $replacements[$fontUrl] = $lockedDownloads[$fontUrl]['localUrl'];
+                    } else {
+                        error_log('Неудачная загрузка шрифта: ' . $fontUrl);
+                    }
+                }
+                
+            } catch (Exception $e) {
+                error_log('Ошибка параллельной загрузки: ' . $e->getMessage());
+            }
+            
+            // Освобождаем все блокировки
+            foreach ($lockHandles as $fontUrl => $lockHandle) {
+                if (isset($lockedDownloads[$fontUrl])) {
+                    $this->releaseLock($lockHandle, $lockedDownloads[$fontUrl]['lockFile']);
+                }
+            }
+        }
+        
+        return $replacements;
+    }
+
+
+
+    /**
+     * Параллельная загрузка файлов шрифтов с использованием cURL Multi
+     */
+    private function downloadFontsParallel($fontsData) {
+        $results = [];
+        $fontUrls = array_keys($fontsData);
+        $batches = array_chunk($fontUrls, MAX_PARALLEL, true);
+        
+        foreach ($batches as $batch) {
+            $batchResults = $this->downloadFontsBatch($batch, $fontsData);
+            $results = array_merge($results, $batchResults);
+        }
+        
+        return $results;
+    }
+
+    /**
+     * Загрузка одной партии шрифтов параллельно
+     */
+    private function downloadFontsBatch($fontUrls, $fontsData) {
+        if (!function_exists('curl_multi_init')) {
+            // Fallback на последовательную загрузку если нет cURL Multi
+            return $this->downloadFontsSequential($fontUrls, $fontsData);
+        }
+        
+        $multiHandle = curl_multi_init();
+        $curlHandles = [];
+        $tempFiles = [];
+        $results = [];
+        
+        // Инициализация cURL хендлов для каждого шрифта
+        foreach ($fontUrls as $fontUrl) {
+            $fontData = $fontsData[$fontUrl];
+            $tempPath = $fontData['localPath'] . self::TEMP_FILE_PREFIX . uniqid();
+            
+            $fileHandle = @fopen($tempPath, 'wb');
+            if (!$fileHandle) {
+                $results[$fontUrl] = false;
+                continue;
+            }
+            
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $fontUrl,
+                CURLOPT_FILE => $fileHandle,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_USERAGENT => $this->getRealUserAgent(),
+                CURLOPT_HTTPHEADER => [
+                    'Accept: */*',
+                    'Referer: ' . $this->getReferer(),
+                    'Connection: keep-alive'
+                ],
+                CURLOPT_NOPROGRESS => false,
+                CURLOPT_PROGRESSFUNCTION => function($resource, $download_size, $downloaded) {
+                    // Ограничение размера файла (10MB)
+                    return ($download_size > 10485760) ? 1 : 0;
+                }
+            ]);
+            
+            curl_multi_add_handle($multiHandle, $ch);
+            
+            $curlHandles[$fontUrl] = $ch;
+            $tempFiles[$fontUrl] = [
+                'tempPath' => $tempPath,
+                'fileHandle' => $fileHandle,
+                'localPath' => $fontData['localPath']
+            ];
+        }
+        
+        // Выполнение параллельных запросов
+        $running = null;
+        do {
+            curl_multi_exec($multiHandle, $running);
+            curl_multi_select($multiHandle, 0.1);
+        } while ($running > 0);
+        
+        // Обработка результатов
+        foreach ($curlHandles as $fontUrl => $ch) {
+            $tempData = $tempFiles[$fontUrl];
+            fclose($tempData['fileHandle']);
+            
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            $success = false;
+            
+            if (empty($error) && $httpCode === 200) {
+                $fileSize = filesize($tempData['tempPath']);
+                if ($fileSize > 0) {
+                    // Атомарное перемещение файла
+                    if (rename($tempData['tempPath'], $tempData['localPath'])) {
+                        @chmod($tempData['localPath'], 0644);
+                        $success = true;
+                    } else {
+                        @unlink($tempData['tempPath']);
+                    }
+                } else {
+                    @unlink($tempData['tempPath']);
+                }
+            } else {
+                @unlink($tempData['tempPath']);
+                error_log("cURL error for {$fontUrl}: {$error}, HTTP: {$httpCode}");
+            }
+            
+            $results[$fontUrl] = $success;
+            
+            curl_multi_remove_handle($multiHandle, $ch);
+            curl_close($ch);
+        }
+        
+        curl_multi_close($multiHandle);
+        
+        return $results;
+    }
+
+    /**
+     * Fallback последовательная загрузка для серверов без cURL Multi
+     */
+    private function downloadFontsSequential($fontUrls, $fontsData) {
+        $results = [];
+        
+        foreach ($fontUrls as $fontUrl) {
+            $fontData = $fontsData[$fontUrl];
+            $success = $this->downloadFontAtomic($fontUrl, $fontData['localPath']);
+            $results[$fontUrl] = $success;
+        }
+        
+        return $results;
+    }
+
+
     private function replaceUrlsInCSS($css, $replacements) {
         // Используем эффективную замену
         foreach ($replacements as $oldUrl => $newUrl) {
@@ -976,7 +1202,11 @@ class GoogleFontsProxy {
                 isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
             ),
             'detected_font_format' => $this->detectFontExtension(),
-            'cache_stats' => $this->getCacheStats()
+            'cache_stats' => $this->getCacheStats(),
+            'parallel_download' => 'enabled',
+            'curl_multi_support' => function_exists('curl_multi_init'),
+            'max_parallel_downloads' => 8,
+            'download_method' => function_exists('curl_multi_init') ? 'curl_multi' : 'sequential'            
         ];
         
         return $debug;
@@ -1083,25 +1313,37 @@ class GoogleFontsProxy {
     }
 
     private function isFileValidAndFresh($filePath) {
+        // Проверяем кэш валидации в памяти
+        $cacheKey = $filePath . ':' . filemtime($filePath);
+        if (isset(self::$fileValidationCache[$cacheKey])) {
+            return self::$fileValidationCache[$cacheKey];
+        }
+        
         $stat = @stat($filePath);
         if ($stat === false) {
+            self::$fileValidationCache[$cacheKey] = false;
             return false;
         }
         
         // Проверяем размер файла (должен быть больше 0)
         if ($stat['size'] <= 0) {
             @unlink($filePath); // Удаляем пустой файл
+            self::$fileValidationCache[$cacheKey] = false;
             return false;
         }
         
         // Проверяем возраст файла
         $age = time() - $stat['mtime'];
         if ($age > $this->maxCacheAge) {
+            self::$fileValidationCache[$cacheKey] = false;
             return false;
         }
         
         // Проверяем доступность для чтения
-        return is_readable($filePath);
+        $isValid = is_readable($filePath);
+        self::$fileValidationCache[$cacheKey] = $isValid;
+        
+        return $isValid;
     }
 
     private function isCSSCacheValid($cacheFile) {

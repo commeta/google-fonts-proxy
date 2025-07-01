@@ -1068,11 +1068,7 @@ class GoogleFontsProxy {
             'font_files' => 0,
             'total_size' => 0,
             'cache_efficiency' => 'improved',
-            'api_v2_support' => true,
-            'directories' => [
-                'css_cache' => $this->cacheDir,
-                'fonts_cache' => $this->fontsDir
-            ]
+            'api_v2_support' => true
         ];
         
         if (is_dir($this->cacheDir)) {

@@ -486,7 +486,8 @@ class GoogleFontsProxy {
         foreach ($fontUrls as $fontUrl) {
             try {
                 $localUrl = $this->processFontSafe($fontUrl);
-                if ($localUrl && $this->validateLocalUrl($localUrl)) {
+                // if ($localUrl && $this->validateLocalUrl($localUrl)) {
+                if ($localUrl) {
                     $replacements[$fontUrl] = $localUrl;
                 } else {
                     error_log('Сформирован некорректный локальный URL: ' . $localUrl);
@@ -545,7 +546,8 @@ class GoogleFontsProxy {
         $lockFile = $this->fontsDir . self::LOCK_FILE_PREFIX . $fileName;
         
         $fontPath = FONTS_WEB_PATH . $fileName;
-        $localUrl = $this->baseUrl . $fontPath;
+        // $localUrl = $this->baseUrl . $fontPath;
+        $localUrl = $fontPath;
         
         // Проверяем существование файла с блокировкой
         if ($this->isFileValidAndFresh($localPath)) {

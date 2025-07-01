@@ -8,20 +8,21 @@
  */
 
 // Константы для путей
-const CACHE_CSS_DIR = 'cache/css/';
-const CACHE_FONTS_DIR = 'cache/fonts/';
-const FONTS_WEB_PATH = '/cache/fonts/';
+const CACHE_CSS_DIR = 'cache/css/'; // Кастомный путь для кеша CSS
+const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
+const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
+const ADMIN_ACTIONS = false; // Административные команды
 
 class GoogleFontsProxy {
     private $cacheDir;
     private $fontsDir;
     private $baseUrl;
     private $maxCacheAge = 86400 * 365; // 24 часа * 365 суток
-    private $maxExecutionTime = 30;
+    private $maxExecutionTime = 30;  // Максимальное время выполнения
     
     const LOCK_TIMEOUT = 30; // Таймаут для блокировок
-    const TEMP_FILE_PREFIX = '.tmp_';
-    const LOCK_FILE_PREFIX = '.lock_';
+    const TEMP_FILE_PREFIX = '.tmp_'; // Префикс временных файлов
+    const LOCK_FILE_PREFIX = '.lock_'; // Префикс файлов-блокировок
     
     
     // Кэш в памяти для избежания повторных операций
@@ -1253,6 +1254,11 @@ class GoogleFontsProxy {
 
 // Обработка административных действий
 if (isset($_GET['action'])) {
+    if(!ADMIN_ACTIONS) {
+        echo "Prohibition of use";
+        exit;
+    }
+    
     switch ($_GET['action']) {
         case 'clear_cache':
             try {

@@ -375,7 +375,6 @@ const ADMIN_ACTIONS = false;            // Административные ко
 ```php
 private $maxCacheAge = 86400 * 365;   // Время кэширования (1 год)
 private $maxExecutionTime = 30;       // Максимальное время выполнения
-const LOCK_TIMEOUT = 30;              // Таймаут ожидания блокировки
 const TEMP_FILE_PREFIX = '.tmp_';     // Префикс временных файлов
 const LOCK_FILE_PREFIX = '.lock_';    // Префикс файлов-блокировок
 ```

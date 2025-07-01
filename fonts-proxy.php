@@ -19,6 +19,11 @@ class GoogleFontsProxy {
     private $maxCacheAge = 86400 * 365; // 24 часа * 365 суток
     private $maxExecutionTime = 30;
     
+    const LOCK_TIMEOUT = 30; // Таймаут для блокировок
+    const TEMP_FILE_PREFIX = '.tmp_';
+    const LOCK_FILE_PREFIX = '.lock_';
+    
+    
     // Кэш в памяти для избежания повторных операций
     private static $memoryCache = [];
     
@@ -59,6 +64,11 @@ class GoogleFontsProxy {
         }
         
         set_time_limit($this->maxExecutionTime);
+        
+        if (!isset(self::$memoryCache['cleanupPerformed'])) {
+            $this->cleanupTempFiles();
+            self::$memoryCache['cleanupPerformed'] = true;
+        }
     }
     
     private function isHttps() {
@@ -89,60 +99,64 @@ class GoogleFontsProxy {
     
     public function handleRequest() {
         try {
-            // Быстрая проверка параметров
             if (empty($_GET)) {
                 throw new Exception('Не переданы параметры для Google Fonts');
             }
             
-            // Генерируем ключ кэша сразу для быстрой проверки
-            $cacheKey = $this->generateCacheKeyFast($_GET);
-            $cacheFile = $this->cacheDir . $cacheKey . '.css';
+            $queryParams = $this->validateAndSanitizeParams($_GET);
+            $googleUrl = $this->buildGoogleFontsUrl($queryParams);
             
-            // Проверяем кэш ПЕРВЫМ делом
-            if ($this->isCacheValid($cacheFile)) {
+            $cacheKey = $this->generateCacheKey($googleUrl);
+            $cacheFile = $this->cacheDir . $cacheKey . '.css';
+            $lockFile = $this->cacheDir . self::LOCK_FILE_PREFIX . $cacheKey . '.css';
+            
+            // Быстрая проверка кэша
+            if ($this->isCSSCacheValid($cacheFile)) {
                 $this->outputCachedCSS($cacheFile);
                 return;
             }
             
-            // Только если кэша нет, делаем полную обработку
-            $queryParams = $this->validateAndSanitizeParams($_GET);
-            
-            // Используем новый метод для построения URL
-            $googleUrl = $this->buildGoogleFontsUrl($queryParams);
-            
-            // Проверяем, совпадает ли новый ключ с быстрым (для надежности)
-            $fullCacheKey = $this->generateCacheKey($googleUrl);
-            if ($fullCacheKey !== $cacheKey) {
-                $cacheFile = $this->cacheDir . $fullCacheKey . '.css';
-                if ($this->isCacheValid($cacheFile)) {
+            // Получаем блокировку для генерации CSS
+            $lockHandle = $this->acquireExclusiveLock($lockFile);
+            if (!$lockHandle) {
+                // Если не удалось получить блокировку, проверяем кэш еще раз
+                if ($this->isCSSCacheValid($cacheFile)) {
                     $this->outputCachedCSS($cacheFile);
                     return;
                 }
+                throw new Exception('Не удалось получить блокировку для CSS кэша');
             }
             
-            // Запрашиваем CSS от Google
-            $css = $this->fetchGoogleCSS($googleUrl);
-            
-            if ($css === false) {
-                throw new Exception('Не удалось получить CSS от Google Fonts');
+            try {
+                // Двойная проверка после получения блокировки
+                if ($this->isCSSCacheValid($cacheFile)) {
+                    $this->outputCachedCSS($cacheFile);
+                    return;
+                }
+                
+                // Запрашиваем CSS от Google
+                $css = $this->fetchGoogleCSS($googleUrl);
+                if ($css === false) {
+                    throw new Exception('Не удалось получить CSS от Google Fonts');
+                }
+                
+                // Обрабатываем CSS и загружаем шрифты
+                $processedCSS = $this->processCSS($css);
+                
+                // Атомарно сохраняем в кэш
+                $this->saveCSSAtomic($cacheFile, $processedCSS);
+                
+                // Выводим CSS
+                $this->outputCSS($processedCSS);
+                
+            } finally {
+                $this->releaseLock($lockHandle, $lockFile);
             }
-            
-            // Обрабатываем CSS и загружаем шрифты
-            $processedCSS = $this->processCSS($css);
-            
-            // Сохраняем в кэш
-            if (!file_put_contents($cacheFile, $processedCSS, LOCK_EX)) {
-                error_log('Не удалось сохранить CSS в кэш: ' . $cacheFile);
-            }
-            
-            // Выводим CSS
-            $this->outputCSS($processedCSS);
             
         } catch (Exception $e) {
             $this->handleError($e);
         }
     }
-
     
     /**
      * Быстрое чтение и вывод кэшированного CSS без лишних операций
@@ -368,19 +382,13 @@ class GoogleFontsProxy {
     }
     
     private function processCSS($css) {
-        // Расширенный паттерн для API v2 (поддержка различных доменов)
         static $fontUrlPattern = null;
+        static $fontUrlPatternV2 = null;
+        
         if ($fontUrlPattern === null) {
             $fontUrlPattern = '/url\s*\(\s*(["\']?)(https?:\/\/fonts\.gstatic\.com\/[^)"\'\s]+)\1\s*\)/i';
-        }
-        
-        // Дополнительный паттерн для новых доменов API v2
-        static $fontUrlPatternV2 = null;
-        if ($fontUrlPatternV2 === null) {
             $fontUrlPatternV2 = '/url\s*\(\s*(["\']?)(https?:\/\/fonts\.googleapis\.com\/[^)"\'\s]+)\1\s*\)/i';
         }
-        
-        $allMatches = [];
         
         // Собираем все URL из обоих паттернов
         preg_match_all($fontUrlPattern, $css, $matches1);
@@ -397,12 +405,10 @@ class GoogleFontsProxy {
         
         $replacements = [];
         
-        // Проверяем существование файлов шрифтов пакетно
-        $this->batchCheckFonts($fontUrls);
-        
+        // Обрабатываем шрифты с защитой от race conditions
         foreach ($fontUrls as $fontUrl) {
             try {
-                $localUrl = $this->processFont($fontUrl);
+                $localUrl = $this->processFontSafe($fontUrl);
                 if ($localUrl && $this->validateLocalUrl($localUrl)) {
                     $replacements[$fontUrl] = $localUrl;
                 } else {
@@ -439,7 +445,7 @@ class GoogleFontsProxy {
     }
     
     private function replaceUrlsInCSS($css, $replacements) {
-        // Используем более эффективную замену
+        // Используем эффективную замену
         foreach ($replacements as $oldUrl => $newUrl) {
             $escapedOldUrl = preg_quote($oldUrl, '/');
             
@@ -451,7 +457,7 @@ class GoogleFontsProxy {
         return $css;
     }
     
-    private function processFont($fontUrl) {
+    private function processFontSafe($fontUrl) {
         $parsedUrl = parse_url($fontUrl);
         if (!$parsedUrl || empty($parsedUrl['path'])) {
             throw new Exception('Неверный URL шрифта: ' . $fontUrl);
@@ -459,32 +465,43 @@ class GoogleFontsProxy {
         
         $fileName = $this->generateFontFileName($fontUrl);
         $localPath = $this->fontsDir . $fileName;
+        $lockFile = $this->fontsDir . self::LOCK_FILE_PREFIX . $fileName;
         
-        // Используем константу для веб-пути
         $fontPath = FONTS_WEB_PATH . $fileName;
         $localUrl = $this->baseUrl . $fontPath;
         
-        // Используем кэшированную информацию о файлах
-        $needsDownload = true;
-        if (isset(self::$memoryCache['fontExists'][$fileName]) && 
-            self::$memoryCache['fontExists'][$fileName]) {
-            
-            $mtime = self::$memoryCache['fontMtime'][$fileName] ?? filemtime($localPath);
-            if ((time() - $mtime) <= $this->maxCacheAge) {
-                $needsDownload = false;
-            }
+        // Проверяем существование файла с блокировкой
+        if ($this->isFileValidAndFresh($localPath)) {
+            return $localUrl;
         }
         
-        if ($needsDownload) {
-            if (!$this->downloadFont($fontUrl, $localPath)) {
+        // Получаем эксклюзивную блокировку для скачивания
+        $lockHandle = $this->acquireExclusiveLock($lockFile);
+        if (!$lockHandle) {
+            // Если не удалось получить блокировку, проверяем еще раз файл
+            // (возможно, другой процесс уже скачал)
+            if ($this->isFileValidAndFresh($localPath)) {
+                return $localUrl;
+            }
+            throw new Exception('Не удалось получить блокировку для шрифта: ' . $fontUrl);
+        }
+        
+        try {
+            // Двойная проверка после получения блокировки
+            if ($this->isFileValidAndFresh($localPath)) {
+                return $localUrl;
+            }
+            
+            // Скачиваем шрифт атомарно
+            if (!$this->downloadFontAtomic($fontUrl, $localPath)) {
                 throw new Exception('Не удалось загрузить шрифт: ' . $fontUrl);
             }
-            // Обновляем кэш в памяти
-            self::$memoryCache['fontExists'][$fileName] = true;
-            self::$memoryCache['fontMtime'][$fileName] = time();
+            
+            return $localUrl;
+            
+        } finally {
+            $this->releaseLock($lockHandle, $lockFile);
         }
-        
-        return $localUrl;
     }
     
     private function generateFontFileName($fontUrl) {
@@ -568,64 +585,94 @@ class GoogleFontsProxy {
         return substr($fileName, 0, 50);
     }
     
-    private function downloadFont($url, $localPath) {
-        $tempPath = $localPath . '.tmp';
+    private function downloadFontAtomic($url, $localPath) {
+        $tempPath = $localPath . self::TEMP_FILE_PREFIX . uniqid();
         
-        if (function_exists('curl_init')) {
-            $success = $this->downloadFontWithCurl($url, $tempPath);
-        } else {
-            $success = $this->downloadFontWithFileGetContents($url, $tempPath);
-        }
-        
-        if ($success && file_exists($tempPath)) {
-            if (filesize($tempPath) > 0) {
-                if (rename($tempPath, $localPath)) {
-                    return true;
-                }
+        try {
+            $success = false;
+            
+            if (function_exists('curl_init')) {
+                $success = $this->downloadFontWithCurl($url, $tempPath);
+            } else {
+                $success = $this->downloadFontWithFileGetContents($url, $tempPath);
             }
+            
+            if (!$success || !file_exists($tempPath)) {
+                return false;
+            }
+            
+            // Проверяем размер скачанного файла
+            $size = filesize($tempPath);
+            if ($size <= 0) {
+                @unlink($tempPath);
+                return false;
+            }
+            
+            // Атомарное перемещение файла
+            if (!rename($tempPath, $localPath)) {
+                @unlink($tempPath);
+                return false;
+            }
+            
+            // Устанавливаем права доступа
+            @chmod($localPath, 0644);
+            
+            return true;
+            
+        } catch (Exception $e) {
+            @unlink($tempPath);
+            throw $e;
         }
-        
-        if (file_exists($tempPath)) {
-            unlink($tempPath);
-        }
-        
-        return false;
     }
+
     
     private function downloadFontWithCurl($url, $localPath) {
         $ch = curl_init();
-        $fp = fopen($localPath, 'wb');
+        $fp = @fopen($localPath, 'wb');
         
         if (!$fp) {
             return false;
         }
         
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
-            CURLOPT_FILE => $fp,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 3,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_USERAGENT => $this->getRealUserAgent(),
-            CURLOPT_HTTPHEADER => [
-                'Accept: */*',
-                'Referer: ' . $this->getReferer(),
-                'Connection: keep-alive'
-            ]
-        ]);
-        
-        $result = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        
-        fclose($fp);
-        curl_close($ch);
-        
-        return $result !== false && $httpCode === 200;
+        try {
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $url,
+                CURLOPT_FILE => $fp,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 3,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_USERAGENT => $this->getRealUserAgent(),
+                CURLOPT_HTTPHEADER => [
+                    'Accept: */*',
+                    'Referer: ' . $this->getReferer(),
+                    'Connection: keep-alive'
+                ],
+                CURLOPT_NOPROGRESS => false,
+                CURLOPT_PROGRESSFUNCTION => function($resource, $download_size, $downloaded, $upload_size, $uploaded) {
+                    // Проверяем максимальный размер файла (10MB)
+                    return ($download_size > 10485760) ? 1 : 0;
+                }
+            ]);
+            
+            $result = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            
+            if ($result === false || !empty($error) || $httpCode !== 200) {
+                return false;
+            }
+            
+            return true;
+            
+        } finally {
+            fclose($fp);
+            curl_close($ch);
+        }
     }
-    
+
     private function downloadFontWithFileGetContents($url, $localPath) {
         $context = stream_context_create([
             'http' => [
@@ -641,13 +688,32 @@ class GoogleFontsProxy {
             ]
         ]);
         
-        $fontData = @file_get_contents($url, false, $context);
-        
-        if ($fontData !== false && strlen($fontData) > 0) {
+        try {
+            $fontData = @file_get_contents($url, false, $context);
+            
+            if ($fontData === false || strlen($fontData) === 0) {
+                return false;
+            }
+            
+            // Проверяем размер
+            if (strlen($fontData) > 10485760) { // 10MB
+                return false;
+            }
+            
+            // Проверяем HTTP код ответа
+            if (isset($http_response_header)) {
+                $httpCode = $this->extractHttpCode($http_response_header);
+                if ($httpCode !== 200) {
+                    return false;
+                }
+            }
+            
             return file_put_contents($localPath, $fontData, LOCK_EX) !== false;
+            
+        } catch (Exception $e) {
+            error_log('Error downloading font: ' . $e->getMessage());
+            return false;
         }
-        
-        return false;
     }
     
     private function addCSSMetadata($css, $fontsCount) {
@@ -794,20 +860,71 @@ class GoogleFontsProxy {
     public function clearCache() {
         $cleared = 0;
         
+        // Очищаем CSS кэш
         if (is_dir($this->cacheDir)) {
-            $files = glob($this->cacheDir . '*.css');
+            $files = array_merge(
+                glob($this->cacheDir . '*.css'),
+                glob($this->cacheDir . self::TEMP_FILE_PREFIX . '*'),
+                glob($this->cacheDir . self::LOCK_FILE_PREFIX . '*')
+            );
+            
             foreach ($files as $file) {
-                if (unlink($file)) {
-                    $cleared++;
+                if (is_file($file)) {
+                    // Проверяем блокировки перед удалением
+                    if (strpos(basename($file), self::LOCK_FILE_PREFIX) === 0) {
+                        // Проверяем, не активна ли блокировка
+                        $handle = @fopen($file, 'r');
+                        if ($handle) {
+                            if (flock($handle, LOCK_EX | LOCK_NB)) {
+                                flock($handle, LOCK_UN);
+                                fclose($handle);
+                                if (unlink($file)) {
+                                    $cleared++;
+                                }
+                            } else {
+                                fclose($handle);
+                                // Файл заблокирован, пропускаем
+                            }
+                        }
+                    } else {
+                        if (unlink($file)) {
+                            $cleared++;
+                        }
+                    }
                 }
             }
         }
         
+        // Очищаем кэш шрифтов
         if (is_dir($this->fontsDir)) {
-            $files = glob($this->fontsDir . '*');
+            $files = array_merge(
+                glob($this->fontsDir . '*'),
+                glob($this->fontsDir . self::TEMP_FILE_PREFIX . '*'),
+                glob($this->fontsDir . self::LOCK_FILE_PREFIX . '*')
+            );
+            
             foreach ($files as $file) {
-                if (is_file($file) && (time() - filemtime($file)) > $this->maxCacheAge) {
-                    if (unlink($file)) {
+                if (is_file($file)) {
+                    $shouldDelete = false;
+                    
+                    if (strpos(basename($file), self::LOCK_FILE_PREFIX) === 0) {
+                        // Проверяем блокировки
+                        $handle = @fopen($file, 'r');
+                        if ($handle) {
+                            if (flock($handle, LOCK_EX | LOCK_NB)) {
+                                flock($handle, LOCK_UN);
+                                fclose($handle);
+                                $shouldDelete = true;
+                            } else {
+                                fclose($handle);
+                            }
+                        }
+                    } else {
+                        // Обычные файлы удаляем если они старые
+                        $shouldDelete = (time() - filemtime($file)) > $this->maxCacheAge;
+                    }
+                    
+                    if ($shouldDelete && unlink($file)) {
                         $cleared++;
                     }
                 }
@@ -926,6 +1043,140 @@ class GoogleFontsProxy {
         return round(($cacheHits / $totalRequests) * 100, 2);
     }
 
+    private function acquireExclusiveLock($lockFile) {
+        $maxAttempts = 10;
+        $attempt = 0;
+        
+        while ($attempt < $maxAttempts) {
+            $handle = @fopen($lockFile, 'w');
+            if ($handle === false) {
+                $attempt++;
+                usleep(100000); // 0.1 секунды
+                continue;
+            }
+            
+            if (flock($handle, LOCK_EX | LOCK_NB)) {
+                // Записываем PID и timestamp для отладки
+                fwrite($handle, getmypid() . ':' . time());
+                fflush($handle);
+                return $handle;
+            }
+            
+            fclose($handle);
+            $attempt++;
+            usleep(100000); // 0.1 секунды
+        }
+        
+        return false;
+    }
+
+    private function releaseLock($handle, $lockFile) {
+        if ($handle) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            @unlink($lockFile);
+        }
+    }
+
+    private function isFileValidAndFresh($filePath) {
+        $stat = @stat($filePath);
+        if ($stat === false) {
+            return false;
+        }
+        
+        // Проверяем размер файла (должен быть больше 0)
+        if ($stat['size'] <= 0) {
+            @unlink($filePath); // Удаляем пустой файл
+            return false;
+        }
+        
+        // Проверяем возраст файла
+        $age = time() - $stat['mtime'];
+        if ($age > $this->maxCacheAge) {
+            return false;
+        }
+        
+        // Проверяем доступность для чтения
+        return is_readable($filePath);
+    }
+
+    private function isCSSCacheValid($cacheFile) {
+        $stat = @stat($cacheFile);
+        if ($stat === false) {
+            return false;
+        }
+        
+        // Проверяем размер файла
+        if ($stat['size'] <= 0) {
+            @unlink($cacheFile);
+            return false;
+        }
+        
+        // Проверяем возраст
+        $age = time() - $stat['mtime'];
+        return $age < $this->maxCacheAge && is_readable($cacheFile);
+    }
+
+    private function saveCSSAtomic($cacheFile, $css) {
+        $tempFile = $cacheFile . self::TEMP_FILE_PREFIX . uniqid();
+        
+        try {
+            if (file_put_contents($tempFile, $css, LOCK_EX) === false) {
+                throw new Exception('Не удалось записать временный CSS файл');
+            }
+            
+            if (!rename($tempFile, $cacheFile)) {
+                @unlink($tempFile);
+                throw new Exception('Не удалось переместить CSS файл в кэш');
+            }
+            
+            @chmod($cacheFile, 0644);
+            
+        } catch (Exception $e) {
+            @unlink($tempFile);
+            throw $e;
+        }
+    }
+
+    private function cleanupTempFiles() {
+        $directories = [$this->cacheDir, $this->fontsDir];
+        
+        foreach ($directories as $dir) {
+            if (!is_dir($dir)) {
+                continue;
+            }
+            
+            $tempFiles = glob($dir . self::TEMP_FILE_PREFIX . '*');
+            foreach ($tempFiles as $tempFile) {
+                if (is_file($tempFile)) {
+                    $age = time() - filemtime($tempFile);
+                    if ($age > 3600) { // Удаляем временные файлы старше часа
+                        @unlink($tempFile);
+                    }
+                }
+            }
+            
+            // Очищаем старые lock файлы
+            $lockFiles = glob($dir . self::LOCK_FILE_PREFIX . '*');
+            foreach ($lockFiles as $lockFile) {
+                if (is_file($lockFile)) {
+                    $age = time() - filemtime($lockFile);
+                    if ($age > 300) { // Удаляем lock файлы старше 5 минут
+                        $handle = @fopen($lockFile, 'r');
+                        if ($handle) {
+                            if (flock($handle, LOCK_EX | LOCK_NB)) {
+                                flock($handle, LOCK_UN);
+                                fclose($handle);
+                                @unlink($lockFile);
+                            } else {
+                                fclose($handle);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Обработка административных действий

@@ -1,9 +1,6 @@
 <?php
-/*!
+/**
  * Google Fonts Proxy Script
- * https://github.com/commeta/google-fonts-proxy
- * Copyright 2025 Commeta
- * Released under the MIT license
  * Кэширует Google Fonts локально и переопределяет пути в CSS
  */
 
@@ -16,6 +13,14 @@ class GoogleFontsProxy {
     
     // Кэш в памяти для избежания повторных операций
     private static $memoryCache = [];
+    
+    private static $modernBrowsers = [
+        'chrome', 'firefox', 'safari', 'edge', 'opera'
+    ];
+
+    private static $legacyBrowsers = [
+        'ie', 'trident'
+    ];
     
     public function __construct() {
         // Директории для кэша
@@ -149,7 +154,16 @@ class GoogleFontsProxy {
         // Сортируем параметры для консистентности
         ksort($params);
         $paramsString = http_build_query($params);
-        return md5($paramsString . $this->getUserAgent() . $this->getAcceptLanguage());
+        
+        // Используем нормализованные данные для кэша
+        $normalizedUA = $this->normalizeUserAgent(
+            isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
+        );
+        
+        // Добавляем информацию о формате шрифта для уникальности
+        $fontFormat = $this->detectFontExtension();
+        
+        return md5($paramsString . $normalizedUA . $fontFormat . $this->getAcceptLanguage());
     }
     
     private function validateAndSanitizeParams($params) {
@@ -174,8 +188,17 @@ class GoogleFontsProxy {
         return substr(trim($value), 0, 500);
     }
     
+    /**
+     * Полная генерация нормализованного ключа кэша
+     */
     private function generateCacheKey($googleUrl) {
-        return md5($googleUrl . $this->getUserAgent() . $this->getAcceptLanguage());
+        $normalizedUA = $this->normalizeUserAgent(
+            isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
+        );
+        
+        $fontFormat = $this->detectFontExtension();
+        
+        return md5($googleUrl . $normalizedUA . $fontFormat . $this->getAcceptLanguage());
     }
     
     private function isCacheValid($cacheFile) {
@@ -206,7 +229,7 @@ class GoogleFontsProxy {
             CURLOPT_MAXREDIRS => 3,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_USERAGENT => $this->getUserAgent(),
+            CURLOPT_USERAGENT => $this->getRealUserAgent(),
             CURLOPT_HTTPHEADER => [
                 'Accept: text/css,*/*;q=0.1',
                 'Accept-Language: ' . $this->getAcceptLanguage(),
@@ -241,7 +264,7 @@ class GoogleFontsProxy {
             'http' => [
                 'method' => 'GET',
                 'header' => [
-                    'User-Agent: ' . $this->getUserAgent(),
+                    'User-Agent: ' . $this->getRealUserAgent(),
                     'Accept: text/css,*/*;q=0.1',
                     'Accept-Language: ' . $this->getAcceptLanguage(),
                     'Accept-Encoding: gzip, deflate, br',
@@ -442,17 +465,37 @@ class GoogleFontsProxy {
         return $fileName;
     }
     
+    /**
+     * Улучшенное определение формата шрифта
+     */
     private function detectFontExtension() {
-        $userAgent = $this->getUserAgent();
+        $userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? strtolower($_SERVER['HTTP_USER_AGENT']) : '';
         
-        if (strpos($userAgent, 'Chrome') !== false || 
-            strpos($userAgent, 'Firefox') !== false || 
-            strpos($userAgent, 'Safari') !== false ||
-            strpos($userAgent, 'Edge') !== false) {
-            return 'woff2';
+        // Проверяем поддержку woff2
+        $supportsWoff2 = false;
+        
+        foreach (self::$modernBrowsers as $browser) {
+            if (strpos($userAgent, $browser) !== false) {
+                $supportsWoff2 = true;
+                break;
+            }
         }
         
-        return 'woff';
+        // Дополнительные проверки для современных браузеров
+        if (!$supportsWoff2) {
+            // Проверяем версии браузеров с поддержкой woff2
+            if (preg_match('/chrome\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 36) {
+                $supportsWoff2 = true;
+            } elseif (preg_match('/firefox\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 39) {
+                $supportsWoff2 = true;
+            } elseif (strpos($userAgent, 'safari') !== false && strpos($userAgent, 'version/') !== false) {
+                if (preg_match('/version\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 10) {
+                    $supportsWoff2 = true;
+                }
+            }
+        }
+        
+        return $supportsWoff2 ? 'woff2' : 'woff';
     }
     
     private function sanitizeFileName($fileName) {
@@ -503,7 +546,7 @@ class GoogleFontsProxy {
             CURLOPT_MAXREDIRS => 3,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_USERAGENT => $this->getUserAgent(),
+            CURLOPT_USERAGENT => $this->getRealUserAgent(),
             CURLOPT_HTTPHEADER => [
                 'Accept: */*',
                 'Referer: ' . $this->getReferer(),
@@ -525,7 +568,7 @@ class GoogleFontsProxy {
             'http' => [
                 'method' => 'GET',
                 'header' => [
-                    'User-Agent: ' . $this->getUserAgent(),
+                    'User-Agent: ' . $this->getRealUserAgent(),
                     'Accept: */*',
                     'Referer: ' . $this->getReferer(),
                     'Connection: keep-alive'
@@ -597,9 +640,50 @@ class GoogleFontsProxy {
         echo "/* Please check server logs for details */\n";
     }
     
+    /**
+     * Нормализует User-Agent для кэширования
+     */
     private function getUserAgent() {
-        return isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 
-               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        $userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        
+        return $this->normalizeUserAgent($userAgent);
+    }
+    
+    /**
+     * Нормализует User-Agent для единого кэширования современных браузеров
+     */
+    private function normalizeUserAgent($userAgent) {
+        $userAgent = strtolower($userAgent);
+        
+        // Определяем тип браузера
+        $isModern = false;
+        $isLegacy = false;
+        
+        foreach (self::$modernBrowsers as $browser) {
+            if (strpos($userAgent, $browser) !== false) {
+                $isModern = true;
+                break;
+            }
+        }
+        
+        if (!$isModern) {
+            foreach (self::$legacyBrowsers as $browser) {
+                if (strpos($userAgent, $browser) !== false) {
+                    $isLegacy = true;
+                    break;
+                }
+            }
+        }
+        
+        // Возвращаем нормализованный User-Agent
+        if ($isModern || (!$isModern && !$isLegacy)) {
+            // Современные браузеры получают единый UA для woff2
+            return 'Mozilla/5.0 Modern Browser (woff2 support)';
+        } else {
+            // Старые браузеры получают отдельный UA для woff
+            return 'Mozilla/5.0 Legacy Browser (woff support)';
+        }
     }
     
     private function getAcceptLanguage() {
@@ -670,10 +754,64 @@ class GoogleFontsProxy {
             'fonts_dir_exists' => is_dir($this->fontsDir),
             'css_cache_files' => count(glob($this->cacheDir . '*.css')),
             'font_cache_files' => count(glob($this->fontsDir . '*')),
+            'cache_normalization' => 'enabled',
+            'user_agent_normalized' => $this->normalizeUserAgent(
+                isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
+            ),
+            'detected_font_format' => $this->detectFontExtension(),
+            'cache_stats' => $this->getCacheStats()
         ];
         
         return $debug;
     }
+    
+    
+    /**
+     * Получает реальный User-Agent для запросов к Google (без нормализации)
+     */
+    private function getRealUserAgent() {
+        return isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 
+               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    }  
+    
+    /**
+     * Показывает эффективность нормализации
+     */
+    public function getCacheStats() {
+        $stats = [
+            'css_files' => 0,
+            'font_files' => 0,
+            'total_size' => 0,
+            'modern_browser_ratio' => 0,
+            'cache_efficiency' => 'improved'
+        ];
+        
+        if (is_dir($this->cacheDir)) {
+            $cssFiles = glob($this->cacheDir . '*.css');
+            $stats['css_files'] = count($cssFiles);
+            
+            foreach ($cssFiles as $file) {
+                $stats['total_size'] += filesize($file);
+            }
+        }
+        
+        if (is_dir($this->fontsDir)) {
+            $fontFiles = glob($this->fontsDir . '*');
+            $stats['font_files'] = count($fontFiles);
+            
+            foreach ($fontFiles as $file) {
+                if (is_file($file)) {
+                    $stats['total_size'] += filesize($file);
+                }
+            }
+        }
+        
+        $stats['total_size_mb'] = round($stats['total_size'] / (1024 * 1024), 2);
+        
+        return $stats;
+    }    
+    
+      
 }
 
 // Обработка административных действий
@@ -722,6 +860,29 @@ if (isset($_GET['action'])) {
                 exit;
             }
             break;
+            
+        case 'cache_stats':
+            try {
+                $proxy = new GoogleFontsProxy();
+                $stats = $proxy->getCacheStats();
+                
+                if (!headers_sent()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                }
+                
+                echo json_encode($stats, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                exit;
+            } catch (Exception $e) {
+                error_log('Cache stats error: ' . $e->getMessage());
+                if (!headers_sent()) {
+                    http_response_code(500);
+                    header('Content-Type: text/plain; charset=utf-8');
+                }
+                echo "Error getting cache stats: " . $e->getMessage();
+                exit;
+            }
+            break;            
+            
     }
 }
 

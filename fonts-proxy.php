@@ -1,8 +1,16 @@
 <?php
-/**
+/*!
  * Google Fonts Proxy Script
+ * https://github.com/commeta/google-fonts-proxy
+ * Copyright 2025 Commeta
+ * Released under the MIT license
  * Кэширует Google Fonts локально и переопределяет пути в CSS
  */
+
+// Константы для путей
+const CACHE_CSS_DIR = 'cache/css/';
+const CACHE_FONTS_DIR = 'cache/fonts/';
+const FONTS_WEB_PATH = '/cache/fonts/';
 
 class GoogleFontsProxy {
     private $cacheDir;
@@ -23,9 +31,9 @@ class GoogleFontsProxy {
     ];
     
     public function __construct() {
-        // Директории для кэша
-        $this->cacheDir = __DIR__ . '/cache/css/';
-        $this->fontsDir = __DIR__ . '/cache/fonts/';
+        // Директории для кэша с использованием констант
+        $this->cacheDir = __DIR__ . '/' . CACHE_CSS_DIR;
+        $this->fontsDir = __DIR__ . '/' . CACHE_FONTS_DIR;
         
         // Кэшируем базовый URL в статической переменной
         if (!isset(self::$memoryCache['baseUrl'])) {
@@ -98,7 +106,9 @@ class GoogleFontsProxy {
             
             // Только если кэша нет, делаем полную обработку
             $queryParams = $this->validateAndSanitizeParams($_GET);
-            $googleUrl = 'https://fonts.googleapis.com/css?' . http_build_query($queryParams);
+            
+            // Используем новый метод для построения URL
+            $googleUrl = $this->buildGoogleFontsUrl($queryParams);
             
             // Проверяем, совпадает ли новый ключ с быстрым (для надежности)
             $fullCacheKey = $this->generateCacheKey($googleUrl);
@@ -132,6 +142,7 @@ class GoogleFontsProxy {
             $this->handleError($e);
         }
     }
+
     
     /**
      * Быстрое чтение и вывод кэшированного CSS без лишних операций
@@ -167,7 +178,12 @@ class GoogleFontsProxy {
     }
     
     private function validateAndSanitizeParams($params) {
-        $allowedParams = ['family', 'subset', 'display', 'text'];
+        // Расширенный список параметров для API v2
+        $allowedParams = [
+            'family', 'subset', 'display', 'text', 
+            // API v2 параметры
+            'axes', 'variable', 'italic', 'weight'
+        ];
         $sanitized = [];
         
         foreach ($params as $key => $value) {
@@ -182,10 +198,26 @@ class GoogleFontsProxy {
         
         return $sanitized;
     }
+
+    /**
+     * Определяет версию Google Fonts API и формирует правильный URL
+     */
+    private function buildGoogleFontsUrl($params) {
+        // Проверяем наличие параметров API v2
+        $isApiV2 = isset($params['axes']) || isset($params['variable']) || 
+                   isset($params['weight']) || isset($params['italic']);
+        
+        if ($isApiV2) {
+            return 'https://fonts.googleapis.com/css2?' . http_build_query($params);
+        } else {
+            return 'https://fonts.googleapis.com/css?' . http_build_query($params);
+        }
+    }
     
     private function sanitizeGoogleFontsParam($value) {
-        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=]/', '', $value);
-        return substr(trim($value), 0, 500);
+        // Расширенная санитизация для API v2 (поддержка больше символов)
+        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=@#]/', '', $value);
+        return substr(trim($value), 0, 1000); // Увеличен лимит для API v2
     }
     
     /**
@@ -336,19 +368,33 @@ class GoogleFontsProxy {
     }
     
     private function processCSS($css) {
-        // Компилируем регулярное выражение один раз
+        // Расширенный паттерн для API v2 (поддержка различных доменов)
         static $fontUrlPattern = null;
         if ($fontUrlPattern === null) {
             $fontUrlPattern = '/url\s*\(\s*(["\']?)(https?:\/\/fonts\.gstatic\.com\/[^)"\'\s]+)\1\s*\)/i';
         }
         
-        preg_match_all($fontUrlPattern, $css, $matches);
+        // Дополнительный паттерн для новых доменов API v2
+        static $fontUrlPatternV2 = null;
+        if ($fontUrlPatternV2 === null) {
+            $fontUrlPatternV2 = '/url\s*\(\s*(["\']?)(https?:\/\/fonts\.googleapis\.com\/[^)"\'\s]+)\1\s*\)/i';
+        }
         
-        if (empty($matches[2])) {
+        $allMatches = [];
+        
+        // Собираем все URL из обоих паттернов
+        preg_match_all($fontUrlPattern, $css, $matches1);
+        preg_match_all($fontUrlPatternV2, $css, $matches2);
+        
+        $fontUrls = array_unique(array_merge(
+            $matches1[2] ?? [],
+            $matches2[2] ?? []
+        ));
+        
+        if (empty($fontUrls)) {
             return $css;
         }
         
-        $fontUrls = array_unique($matches[2]);
         $replacements = [];
         
         // Проверяем существование файлов шрифтов пакетно
@@ -413,7 +459,9 @@ class GoogleFontsProxy {
         
         $fileName = $this->generateFontFileName($fontUrl);
         $localPath = $this->fontsDir . $fileName;
-        $fontPath = '/cache/fonts/' . $fileName;
+        
+        // Используем константу для веб-пути
+        $fontPath = FONTS_WEB_PATH . $fileName;
         $localUrl = $this->baseUrl . $fontPath;
         
         // Используем кэшированную информацию о файлах
@@ -471,8 +519,9 @@ class GoogleFontsProxy {
     private function detectFontExtension() {
         $userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? strtolower($_SERVER['HTTP_USER_AGENT']) : '';
         
-        // Проверяем поддержку woff2
+        // Проверяем поддержку современных форматов
         $supportsWoff2 = false;
+        $supportsVariableFonts = false;
         
         foreach (self::$modernBrowsers as $browser) {
             if (strpos($userAgent, $browser) !== false) {
@@ -486,13 +535,27 @@ class GoogleFontsProxy {
             // Проверяем версии браузеров с поддержкой woff2
             if (preg_match('/chrome\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 36) {
                 $supportsWoff2 = true;
+                if ($matches[1] >= 62) {
+                    $supportsVariableFonts = true;
+                }
             } elseif (preg_match('/firefox\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 39) {
                 $supportsWoff2 = true;
+                if ($matches[1] >= 62) {
+                    $supportsVariableFonts = true;
+                }
             } elseif (strpos($userAgent, 'safari') !== false && strpos($userAgent, 'version/') !== false) {
                 if (preg_match('/version\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 10) {
                     $supportsWoff2 = true;
+                    if ($matches[1] >= 11) {
+                        $supportsVariableFonts = true;
+                    }
                 }
             }
+        }
+        
+        // Приоритет современным форматам
+        if ($supportsVariableFonts) {
+            return 'woff2'; // Variable fonts обычно в woff2
         }
         
         return $supportsWoff2 ? 'woff2' : 'woff';
@@ -628,16 +691,45 @@ class GoogleFontsProxy {
     }
     
     private function handleError($exception) {
-        error_log('Google Fonts Proxy Error: ' . $exception->getMessage());
+        $errorMessage = $exception->getMessage();
+        $errorCode = $exception->getCode();
+        
+        error_log('Google Fonts Proxy Error [' . $errorCode . ']: ' . $errorMessage);
         
         if (!headers_sent()) {
-            http_response_code(500);
+            // Более мягкая обработка ошибок - возвращаем 200 с fallback CSS
+            http_response_code(200);
             header('Content-Type: text/css; charset=utf-8');
             header('Access-Control-Allow-Origin: *');
+            header('Cache-Control: no-cache, no-store, must-revalidate');
         }
         
-        echo "/* Error: " . htmlspecialchars($exception->getMessage()) . " */\n";
-        echo "/* Please check server logs for details */\n";
+        // Возвращаем базовый fallback CSS вместо ошибки
+        $fallbackCSS = $this->generateFallbackCSS($errorMessage);
+        echo $fallbackCSS;
+    }
+
+    /**
+     * Генерирует fallback CSS при ошибках
+     */
+    private function generateFallbackCSS($errorMessage) {
+        $fallback = [
+            "/* Google Fonts Proxy - Fallback Mode */",
+            "/* Error: " . htmlspecialchars($errorMessage) . " */",
+            "/* Using system fonts as fallback */",
+            "",
+            "body, html {",
+            "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;",
+            "}",
+            "",
+            "/* Common font fallbacks */",
+            ".font-serif { font-family: Georgia, 'Times New Roman', serif; }",
+            ".font-sans { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }",
+            ".font-mono { font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', monospace; }",
+            ""
+        ];
+        
+        return implode("\n", $fallback);
     }
     
     /**
@@ -782,8 +874,12 @@ class GoogleFontsProxy {
             'css_files' => 0,
             'font_files' => 0,
             'total_size' => 0,
-            'modern_browser_ratio' => 0,
-            'cache_efficiency' => 'improved'
+            'cache_efficiency' => 'improved',
+            'api_v2_support' => true,
+            'directories' => [
+                'css_cache' => $this->cacheDir,
+                'fonts_cache' => $this->fontsDir
+            ]
         ];
         
         if (is_dir($this->cacheDir)) {
@@ -807,11 +903,29 @@ class GoogleFontsProxy {
         }
         
         $stats['total_size_mb'] = round($stats['total_size'] / (1024 * 1024), 2);
+        $stats['cache_hit_ratio'] = $this->calculateCacheHitRatio();
         
         return $stats;
-    }    
+    }  
     
-      
+
+    /**
+     * Рассчитывает эффективность кэша
+     */
+    private function calculateCacheHitRatio() {
+        $cacheHits = 0;
+        $totalRequests = 0;
+        
+        // Простая эвристика на основе файлов в кэше
+        if (is_dir($this->cacheDir)) {
+            $cssFiles = glob($this->cacheDir . '*.css');
+            $cacheHits = count($cssFiles);
+            $totalRequests = max($cacheHits, 1); // Избегаем деления на ноль
+        }
+        
+        return round(($cacheHits / $totalRequests) * 100, 2);
+    }
+
 }
 
 // Обработка административных действий

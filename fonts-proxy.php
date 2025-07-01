@@ -191,18 +191,44 @@ class GoogleFontsProxy {
         return md5($paramsString . $normalizedUA . $fontFormat . $this->getAcceptLanguage());
     }
     
+    /**
+     * валидация параметров с поддержкой всех v2 форматов
+     */
     private function validateAndSanitizeParams($params) {
-        // Расширенный список параметров для API v2
+        // Все возможные параметры Google Fonts API v1 и v2
         $allowedParams = [
-            'family', 'subset', 'display', 'text', 
-            // API v2 параметры
-            'axes', 'variable', 'italic', 'weight'
+            // API v1
+            'family', 'subset', 'display', 'text',
+            // API v2 
+            'axes', 'variable', 'italic', 'weight',
+            // Дополнительные параметры
+            'effect', 'callback'
         ];
+        
         $sanitized = [];
         
+        // Обработка multiple family параметров для v2
+        if (isset($params['family'])) {
+            if (is_array($params['family'])) {
+                // Множественные family параметры
+                $sanitized['family'] = [];
+                foreach ($params['family'] as $family) {
+                    $sanitized['family'][] = $this->sanitizeGoogleFontsParamV2($family);
+                }
+            } else {
+                $sanitized['family'] = $this->sanitizeGoogleFontsParamV2($params['family']);
+            }
+            unset($params['family']);
+        }
+        
+        // Обработка остальных параметров
         foreach ($params as $key => $value) {
             if (in_array($key, $allowedParams)) {
-                $sanitized[$key] = $this->sanitizeGoogleFontsParam($value);
+                if (is_array($value)) {
+                    $sanitized[$key] = array_map([$this, 'sanitizeGoogleFontsParamV2'], $value);
+                } else {
+                    $sanitized[$key] = $this->sanitizeGoogleFontsParamV2($value);
+                }
             }
         }
         
@@ -212,20 +238,70 @@ class GoogleFontsProxy {
         
         return $sanitized;
     }
+    
+    /**
+     * Расширенная санитизация для Google Fonts API v2
+     */
+    private function sanitizeGoogleFontsParamV2($value) {
+        // v2 поддерживает больше символов: @, :, ;, запятые, точки, диапазоны
+        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=@#\[\]]/', '', $value);
+        return substr(trim($value), 0, 1500); // Увеличенный лимит для сложных v2 запросов
+    }    
 
     /**
      * Определяет версию Google Fonts API и формирует правильный URL
      */
     private function buildGoogleFontsUrl($params) {
         // Проверяем наличие параметров API v2
-        $isApiV2 = isset($params['axes']) || isset($params['variable']) || 
-                   isset($params['weight']) || isset($params['italic']);
+        $isApiV2 = $this->detectApiV2($params);
         
         if ($isApiV2) {
             return 'https://fonts.googleapis.com/css2?' . http_build_query($params);
         } else {
             return 'https://fonts.googleapis.com/css?' . http_build_query($params);
         }
+    }
+
+    /**
+     * Определяет является ли запрос Google Fonts API v2
+     */
+    private function detectApiV2($params) {
+        // Явные параметры v2
+        if (isset($params['axes']) || isset($params['variable']) || 
+            isset($params['weight']) || isset($params['italic'])) {
+            return true;
+        }
+        
+        // Проверяем синтаксис v2 в параметре family
+        if (isset($params['family'])) {
+            $families = is_array($params['family']) ? $params['family'] : [$params['family']];
+            
+            foreach ($families as $family) {
+                // v2 синтаксис: Family:ital,wght@0,400;1,700
+                if (preg_match('/:[a-z,]+@[\d;,\.]+/', $family)) {
+                    return true;
+                }
+                
+                // v2 синтаксис: Family:wght@400;700
+                if (preg_match('/:[a-z]+@[\d;,\.]+/', $family)) {
+                    return true;
+                }
+                
+                // Переменные шрифты: Family:opsz,wght@8..144,100..900
+                if (preg_match('/:[a-z,]+@[\d\.,;]+\.\.[\d\.,;]+/', $family)) {
+                    return true;
+                }
+            }
+        }
+        
+        // Проверяем наличие множественных семейств (характерно для v2)
+        if (is_array($params) && count(array_filter(array_keys($params), function($key) {
+            return $key === 'family';
+        })) > 1) {
+            return true;
+        }
+        
+        return false;
     }
     
     private function sanitizeGoogleFontsParam($value) {

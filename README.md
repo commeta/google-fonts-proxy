@@ -71,6 +71,7 @@
 
 ### Примеры использования
 
+**V1 API**
 ```html
 <!-- Один шрифт -->
 <link href="/fonts-proxy.php?family=Roboto:400,700" rel="stylesheet">
@@ -80,6 +81,24 @@
 
 <!-- С дополнительными параметрами -->
 <link href="/fonts-proxy.php?family=Roboto:400&display=swap&subset=latin,cyrillic" rel="stylesheet">
+```
+
+**V2 API**
+```html
+<!-- 1) Базовый v2: вес через wght@ -->
+<link href="/fonts-proxy.php?family=Roboto:wght@400;700" rel="stylesheet">
+
+<!-- 2) Italic + weight: ital,wght@0,400;1,700 -->
+<link href="/fonts-proxy.php?family=Open+Sans:ital,wght@0,300;0,400;1,400;1,700" rel="stylesheet">
+
+<!-- 3) Переменные шрифты (variable font) с осями -->
+<link href="/fonts-proxy.php?family=Roboto+Flex:opsz,wght@8..144,100..900" rel="stylesheet">
+
+<!-- 4) С display, текстовым ограничением и subset -->
+<link href="/fonts-proxy.php?family=Montserrat:wght@400;600&display=swap&text=Hello%20World!&subset=latin-ext" rel="stylesheet">
+
+<!-- 5) Мультяшрифты с разными семействами через v2 -->
+<link href="/fonts-proxy.php?family=Roboto+Slab:wght@300;600&family=Lato:ital,wght@0,400;1,700&display=swap" rel="stylesheet">
 ```
 
 ## 🛠️ Административные команды
@@ -147,11 +166,23 @@ curl "https://yourdomain.com/fonts-proxy.php?action=cache_stats"
 
 ### Основные настройки
 
+Вы можете изменить следующие параметры в файле скрипта:
+
+```php
+// Константы для путей
+const CACHE_CSS_DIR = 'cache/css/';     // Кастомный путь для кеша CSS
+const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
+const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
+```
+
 Вы можете изменить следующие параметры в классе `GoogleFontsProxy`:
 
 ```php
 private $maxCacheAge = 86400 * 365;   // Время кэширования (1 год)
 private $maxExecutionTime = 30;       // Максимальное время выполнения
+const LOCK_TIMEOUT = 30;              // Таймаут ожидания блокировки
+const TEMP_FILE_PREFIX = '.tmp_';     // Префикс временных файлов
+const LOCK_FILE_PREFIX = '.lock_';    // Префикс файлов-блокировок
 ```
 
 ### Настройка веб-сервера
@@ -311,6 +342,8 @@ find cache/ -type f | wc -l
 - ✅ Безопасная работа с временными файлами
 - ✅ Защита от инъекций в регулярных выражениях
 - ✅ Валидация сгенерированных локальных URL
+- ✅ Race Condition при создании файлов кэша
+
 
 ### Дополнительные рекомендации
 
@@ -327,6 +360,130 @@ find cache/ -type f | wc -l
         Require local
     </RequireAll>
 </FilesMatch>
+```
+
+
+## Принцип работы Google Fonts Proxy:
+
+1. **Инициализация** - Создание необходимых директорий и проверка окружения
+2. **Обработка запроса** - Валидация параметров и определение версии Google Fonts API
+3. **Кэширование CSS** - Проверка локального кэша с использованием блокировок для безопасности
+4. **Получение данных** - Запрос к Google Fonts API через cURL или file_get_contents
+5. **Обработка шрифтов** - Извлечение URL шрифтов, их загрузка и кэширование
+6. **Оптимизация** - Замена внешних URL на локальные пути в CSS
+7. **Вывод результата** - Отправка готового CSS с соответствующими HTTP заголовками
+
+## Ключевые особенности:
+
+- **Атомарные операции** - Использование временных файлов и блокировок для безопасного кэширования
+- **Определение формата шрифтов** - Автоматический выбор WOFF2 для современных браузеров или WOFF для старых
+- **Обработка ошибок** - Fallback на системные шрифты при проблемах с загрузкой
+- **Административные функции** - Очистка кэша, отладка и статистика
+- **Оптимизация производительности** - Кэширование в памяти и эффективная проверка файлов
+
+Скрипт обеспечивает локальное кэширование Google Fonts для соответствия GDPR и улучшения производительности сайта.
+
+```mermaid
+graph TB
+    Start([Запрос к fonts-proxy.php]) --> CheckAction{Есть параметр action?}
+    
+    %% Административные действия
+    CheckAction -->|Да| AdminActions[Административные действия]
+    AdminActions --> ClearCache[clear_cache: Очистка кэша]
+    AdminActions --> DebugPerf[debug_performance: Отладка]
+    AdminActions --> CacheStats[cache_stats: Статистика]
+    ClearCache --> EndAdmin[Возврат результата]
+    DebugPerf --> EndAdmin
+    CacheStats --> EndAdmin
+    
+    %% Основной поток
+    CheckAction -->|Нет| Init[Инициализация GoogleFontsProxy]
+    Init --> CreateDirs[Создание директорий cache/css/ и cache/fonts/]
+    CreateDirs --> ValidateParams[Валидация параметров GET]
+    ValidateParams --> BuildURL[Построение URL для Google Fonts API]
+    
+    %% Определение версии API
+    BuildURL --> DetectAPI{Определение версии API}
+    DetectAPI -->|v1| APIV1[fonts.googleapis.com/css]
+    DetectAPI -->|v2| APIV2[fonts.googleapis.com/css2]
+    
+    APIV1 --> GenerateKey[Генерация ключа кэша]
+    APIV2 --> GenerateKey
+    
+    %% Обработка кэша CSS
+    GenerateKey --> CheckCSSCache{CSS в кэше и валиден?}
+    CheckCSSCache -->|Да| OutputCached[Вывод кэшированного CSS]
+    CheckCSSCache -->|Нет| AcquireLock[Получение блокировки для CSS]
+    
+    AcquireLock --> LockSuccess{Блокировка получена?}
+    LockSuccess -->|Нет| CheckCacheAgain[Повторная проверка кэша]
+    CheckCacheAgain --> OutputCached
+    
+    LockSuccess -->|Да| DoubleCheck[Двойная проверка кэша]
+    DoubleCheck -->|Кэш найден| OutputCached
+    DoubleCheck -->|Кэш не найден| FetchCSS[Запрос CSS от Google]
+    
+    %% Получение CSS от Google
+    FetchCSS --> UseCurl{cURL доступен?}
+    UseCurl -->|Да| CurlRequest[HTTP запрос через cURL]
+    UseCurl -->|Нет| FileGetContents[HTTP запрос через file_get_contents]
+    
+    CurlRequest --> ProcessCSS[Обработка полученного CSS]
+    FileGetContents --> ProcessCSS
+    
+    %% Обработка шрифтов
+    ProcessCSS --> ExtractFontURLs[Извлечение URL шрифтов из CSS]
+    ExtractFontURLs --> CheckFonts{Шрифты найдены?}
+    CheckFonts -->|Нет| SaveCSS[Сохранение CSS в кэш]
+    CheckFonts -->|Да| ProcessFonts[Обработка каждого шрифта]
+    
+    ProcessFonts --> FontLoop[Цикл по шрифтам]
+    FontLoop --> CheckFontCache{Шрифт в кэше?}
+    CheckFontCache -->|Да| NextFont[Следующий шрифт]
+    CheckFontCache -->|Нет| FontLock[Блокировка для шрифта]
+    
+    FontLock --> DownloadFont[Скачивание шрифта]
+    DownloadFont --> FontFormat{Формат шрифта}
+    FontFormat --> WOFF2[WOFF2 для современных браузеров]
+    FontFormat --> WOFF[WOFF для старых браузеров]
+    
+    WOFF2 --> SaveFont[Атомарное сохранение шрифта]
+    WOFF --> SaveFont
+    SaveFont --> NextFont
+    
+    NextFont --> AllFontsProcessed{Все шрифты обработаны?}
+    AllFontsProcessed -->|Нет| FontLoop
+    AllFontsProcessed -->|Да| ReplaceURLs[Замена URL в CSS на локальные]
+    
+    ReplaceURLs --> AddMetadata[Добавление метаданных в CSS]
+    AddMetadata --> SaveCSS
+    SaveCSS --> ReleaseLock[Освобождение блокировки]
+    ReleaseLock --> OutputCSS[Вывод CSS с заголовками]
+    
+    OutputCached --> End([Завершение])
+    OutputCSS --> End
+    EndAdmin --> End
+    
+    %% Обработка ошибок
+    ProcessCSS -.->|Ошибка| HandleError[Обработка ошибки]
+    DownloadFont -.->|Ошибка| HandleError
+    HandleError --> FallbackCSS[Генерация Fallback CSS]
+    FallbackCSS --> End
+    
+    %% Стили для разных типов узлов
+    classDef startEnd fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef decision fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef cache fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef api fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef error fill:#ffebee,stroke:#d32f2f,stroke-width:2px
+    
+    class Start,End startEnd
+    class Init,CreateDirs,ValidateParams,ProcessCSS,ExtractFontURLs,ProcessFonts,ReplaceURLs,AddMetadata,SaveCSS,OutputCSS process
+    class CheckAction,DetectAPI,CheckCSSCache,LockSuccess,UseCurl,CheckFonts,CheckFontCache,FontFormat,AllFontsProcessed decision
+    class OutputCached,SaveFont,GenerateKey cache
+    class APIV1,APIV2,BuildURL,FetchCSS,CurlRequest,FileGetContents api
+    class HandleError,FallbackCSS error
 ```
 
 ## 📝 Лицензия

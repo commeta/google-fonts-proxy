@@ -11,7 +11,7 @@ class GoogleFontsProxy {
     private $cacheDir;
     private $fontsDir;
     private $baseUrl;
-    private $maxCacheAge = 86400; // 24 часа
+    private $maxCacheAge = 86400 * 365; // 24 часа * 365 суток
     private $maxExecutionTime = 30;
     
     // Кэш в памяти для избежания повторных операций

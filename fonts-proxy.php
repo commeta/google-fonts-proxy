@@ -487,7 +487,7 @@ class GoogleFontsProxy {
             CURLOPT_USERAGENT => $this->getRealUserAgent(),
             CURLOPT_HTTPHEADER => [
                 'Accept: text/css,*/*;q=0.1',
-                'Accept-Language: ' . $this->getAcceptLanguage(),
+                'Accept-Language: ' . $_SERVER['HTTP_ACCEPT_LANGUAGE'],
                 'Accept-Encoding: gzip, deflate, br',
                 'Connection: keep-alive',
                 'Cache-Control: no-cache'
@@ -521,7 +521,7 @@ class GoogleFontsProxy {
                 'header' => [
                     'User-Agent: ' . $this->getRealUserAgent(),
                     'Accept: text/css,*/*;q=0.1',
-                    'Accept-Language: ' . $this->getAcceptLanguage(),
+                    'Accept-Language: ' . $_SERVER['HTTP_ACCEPT_LANGUAGE'],
                     'Accept-Encoding: gzip, deflate, br',
                     'Connection: keep-alive',
                     'Cache-Control: no-cache'
@@ -1248,20 +1248,42 @@ class GoogleFontsProxy {
         }
     }
     
-    private function getAcceptLanguage() {
-        if (!isset($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
+    private function getAcceptLanguage(): string
+    {
+        if (empty($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
             return 'en';
         }
-        
-        $acceptLang = $_SERVER['HTTP_ACCEPT_LANGUAGE'];
-        
-        // Извлекаем только основной язык (первые 2 символа)
-        if (preg_match('/^([a-z]{2})/i', $acceptLang, $matches)) {
-            return strtolower($matches[1]);
+
+        $langs = [];
+        // Разбиваем по запятой
+        foreach (explode(',', $_SERVER['HTTP_ACCEPT_LANGUAGE']) as $part) {
+            // part может быть вида "en-US;q=0.8" или "ja"
+            $segments = explode(';q=', trim($part), 2);
+            $tag = strtolower(trim($segments[0]));            // e.g. "en-us"
+            $q   = isset($segments[1]) ? (float)$segments[1] : 1.0; // q=0..1
+
+            $primary = substr($tag, 0, 2); // "en" из "en-us", "ja" из "ja"
+
+            // сохраняем только самый высокий q для каждого primary
+            if (!isset($langs[$primary]) || $langs[$primary] < $q) {
+                $langs[$primary] = $q;
+            }
         }
-        
-        return 'en'; // Fallback
+
+        // Сортируем по убыванию q, сохраняя ключи
+        arsort($langs);
+
+        // Оставляем только ключи (primary tags)
+        $result = array_keys($langs);
+
+        // Если получилось пусто — fallback
+        if (empty($result)) {
+            return 'en';
+        }
+
+        return implode(',', $result);
     }
+
     
     private function getReferer() {
         if (isset($_SERVER['HTTP_REFERER'])) {

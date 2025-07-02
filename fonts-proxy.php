@@ -11,7 +11,7 @@
 const CACHE_CSS_DIR = 'cache/css/'; // Кастомный путь для кеша CSS
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
-const ADMIN_ACTIONS = false; // Административные команды
+const ADMIN_ACTIONS = true; // Административные команды
 const MAX_PARALLEL = 32; // Максимум одновременных соединений
 
 class GoogleFontsProxy {
@@ -37,6 +37,20 @@ class GoogleFontsProxy {
     ];
     
     private static $fileValidationCache = [];
+    
+    const VARIABLE_FONT_AXES = [
+        'wght' => ['min' => 1, 'max' => 1000],      // Weight
+        'wdth' => ['min' => 25, 'max' => 200],      // Width
+        'opsz' => ['min' => 6, 'max' => 288],       // Optical Size
+        'slnt' => ['min' => -90, 'max' => 90],      // Slant
+        'ital' => ['min' => 0, 'max' => 1],         // Italic
+        'GRAD' => ['min' => -200, 'max' => 150],    // Grade
+        'CASL' => ['min' => 0, 'max' => 1],         // Casual
+        'CRSV' => ['min' => 0, 'max' => 1],         // Cursive
+        'MONO' => ['min' => 0, 'max' => 1],         // Monospace
+        'SOFT' => ['min' => 0, 'max' => 100],       // Softness
+        'WONK' => ['min' => 0, 'max' => 1],         // Wonky
+    ];    
     
     public function __construct() {
         // Директории для кэша с использованием констант
@@ -179,28 +193,29 @@ class GoogleFontsProxy {
      * валидация параметров с поддержкой всех v2 форматов
      */
     private function validateAndSanitizeParams($params) {
-        // Все возможные параметры Google Fonts API v1 и v2
         $allowedParams = [
-            // API v1
             'family', 'subset', 'display', 'text',
-            // API v2 
             'axes', 'variable', 'italic', 'weight',
-            // Дополнительные параметры
             'effect', 'callback'
         ];
         
         $sanitized = [];
         
-        // Обработка multiple family параметров для v2
+        // Специальная обработка family параметра
         if (isset($params['family'])) {
             if (is_array($params['family'])) {
-                // Множественные family параметры
                 $sanitized['family'] = [];
                 foreach ($params['family'] as $family) {
-                    $sanitized['family'][] = $this->sanitizeGoogleFontsParamV2($family);
+                    $cleanFamily = $this->sanitizeGoogleFontsParamV2($family);
+                    if ($this->validateFamilyString($cleanFamily)) {
+                        $sanitized['family'][] = $cleanFamily;
+                    }
                 }
             } else {
-                $sanitized['family'] = $this->sanitizeGoogleFontsParamV2($params['family']);
+                $cleanFamily = $this->sanitizeGoogleFontsParamV2($params['family']);
+                if ($this->validateFamilyString($cleanFamily)) {
+                    $sanitized['family'] = $cleanFamily;
+                }
             }
             unset($params['family']);
         }
@@ -222,67 +237,183 @@ class GoogleFontsProxy {
         
         return $sanitized;
     }
-    
+
+    private function validateFamilyString($familyString) {
+        // Базовая валидация
+        if (empty($familyString) || strlen($familyString) > 2000) {
+            return false;
+        }
+        
+        // Проверка на подозрительные паттерны
+        $suspiciousPatterns = [
+            '/\.\.\.|_{3,}|-{3,}/',  // Множественные точки, подчеркивания, дефисы
+            '/[<>{}()\/\\]/',        // Подозрительные символы
+            '/javascript:|data:|vbscript:/i' // Потенциально опасный контент
+        ];
+        
+        foreach ($suspiciousPatterns as $pattern) {
+            if (preg_match($pattern, $familyString)) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
     /**
      * Расширенная санитизация для Google Fonts API v2
      */
     private function sanitizeGoogleFontsParamV2($value) {
-        // v2 поддерживает больше символов: @, :, ;, запятые, точки, диапазоны
-        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=@#\[\]]/', '', $value);
-        return substr(trim($value), 0, 1500); // Увеличенный лимит для сложных v2 запросов
-    }    
+        // Расширенный набор разрешенных символов для API v2
+        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=@#\[\]\.]+/', '', $value);
+        
+        // Валидация диапазонов в переменных шрифтах
+        if (preg_match('/(\d+)\.\.(\d+)/', $value, $matches)) {
+            $min = (int)$matches[1];
+            $max = (int)$matches[2];
+            
+            // Проверка корректности диапазонов для различных осей
+            if (strpos($value, 'wght@') !== false) {
+                // Weight: 1-1000
+                $min = max(1, min(1000, $min));
+                $max = max(1, min(1000, $max));
+            } elseif (strpos($value, 'wdth@') !== false) {
+                // Width: 25-200%
+                $min = max(25, min(200, $min));
+                $max = max(25, min(200, $max));
+            } elseif (strpos($value, 'opsz@') !== false) {
+                // Optical size: 6-288pt
+                $min = max(6, min(288, $min));
+                $max = max(6, min(288, $max));
+            } elseif (strpos($value, 'slnt@') !== false) {
+                // Slant: -90 to 90 degrees
+                $min = max(-90, min(90, $min));
+                $max = max(-90, min(90, $max));
+            }
+            
+            if ($min >= $max) {
+                $max = $min + 1; // Исправление некорректных диапазонов
+            }
+            
+            $value = str_replace($matches[0], $min . '..' . $max, $value);
+        }
+        
+        return substr(trim($value), 0, 2000); // Увеличен лимит для сложных параметров v2
+    } 
 
     /**
      * Определяет версию Google Fonts API и формирует правильный URL
      */
     private function buildGoogleFontsUrl($params) {
-        // Проверяем наличие параметров API v2
         $isApiV2 = $this->detectApiV2($params);
         
         if ($isApiV2) {
-            return 'https://fonts.googleapis.com/css2?' . http_build_query($params);
+            // API v2 требует специальной обработки family параметров
+            $processedParams = $this->processV2Params($params);
+            return 'https://fonts.googleapis.com/css2?' . http_build_query($processedParams);
         } else {
+            // API v1
             return 'https://fonts.googleapis.com/css?' . http_build_query($params);
         }
+    }
+
+    private function processV2Params($params) {
+        $processed = [];
+        
+        foreach ($params as $key => $value) {
+            if ($key === 'family') {
+                if (is_array($value)) {
+                    // Множественные семейства для API v2
+                    foreach ($value as $family) {
+                        $processed['family'][] = $this->optimizeV2FamilyString($family);
+                    }
+                } else {
+                    $processed['family'] = $this->optimizeV2FamilyString($value);
+                }
+            } else {
+                $processed[$key] = $value;
+            }
+        }
+        
+        return $processed;
+    }
+
+    private function optimizeV2FamilyString($familyString) {
+        // Удаление дублирующихся весов и стилей
+        if (preg_match('/^([^:]+):([^@]+)@(.+)$/', $familyString, $matches)) {
+            $familyName = $matches[1];
+            $axes = $matches[2];
+            $values = $matches[3];
+            
+            // Сортировка и дедупликация значений
+            $valueGroups = explode(';', $values);
+            $uniqueGroups = array_unique($valueGroups);
+            sort($uniqueGroups);
+            
+            return $familyName . ':' . $axes . '@' . implode(';', $uniqueGroups);
+        }
+        
+        return $familyString;
     }
 
     /**
      * Определяет является ли запрос Google Fonts API v2
      */
     private function detectApiV2($params) {
-        // Явные параметры v2
+        // Явные индикаторы API v2
         if (isset($params['axes']) || isset($params['variable']) || 
             isset($params['weight']) || isset($params['italic'])) {
             return true;
         }
         
-        // Проверяем синтаксис v2 в параметре family
+        // Проверка family параметров на синтаксис v2
         if (isset($params['family'])) {
             $families = is_array($params['family']) ? $params['family'] : [$params['family']];
             
             foreach ($families as $family) {
-                // v2 синтаксис: Family:ital,wght@0,400;1,700
-                if (preg_match('/:[a-z,]+@[\d;,\.]+/', $family)) {
-                    return true;
-                }
+                // Расширенные паттерны для API v2
+                $v2Patterns = [
+                    // Переменные шрифты с осями: Family:wght@100..900
+                    '/:[a-z,]+@[\d\.,;]+\.\.[\d\.,;]+/',
+                    // Именованные экземпляры: Family:ital,wght@0,400;1,700
+                    '/:[a-z,]+@[\d;,\.]+/',
+                    // Сложные комбинации осей: Family:ital,opsz,wght@0,14,400;1,14,700
+                    '/:[a-z,]+@(?:[\d\.,;]+;)*[\d\.,;]+/',
+                    // Новый синтаксис с дефисами: Family:wght@100-900
+                    '/:[a-z,]+-[\d\.,;-]+/',
+                    // Optical size axis: Family:opsz@8..144
+                    '/:opsz@[\d\.]+\.\.[\d\.]+/',
+                    // Width axis: Family:wdth@75..125
+                    '/:wdth@[\d\.]+\.\.[\d\.]+/',
+                    // Slant axis: Family:slnt@-15..0
+                    '/:slnt@-?[\d\.]+\.\.-?[\d\.]+/',
+                    // Grade axis: Family:GRAD@-200..150
+                    '/:GRAD@-?[\d\.]+\.\.-?[\d\.]+/'
+                ];
                 
-                // v2 синтаксис: Family:wght@400;700
-                if (preg_match('/:[a-z]+@[\d;,\.]+/', $family)) {
-                    return true;
-                }
-                
-                // Переменные шрифты: Family:opsz,wght@8..144,100..900
-                if (preg_match('/:[a-z,]+@[\d\.,;]+\.\.[\d\.,;]+/', $family)) {
-                    return true;
+                foreach ($v2Patterns as $pattern) {
+                    if (preg_match($pattern, $family)) {
+                        return true;
+                    }
                 }
             }
         }
         
-        // Проверяем наличие множественных семейств (характерно для v2)
-        if (is_array($params) && count(array_filter(array_keys($params), function($key) {
-            return $key === 'family';
-        })) > 1) {
-            return true;
+        // Проверка на множественные family параметры (характерно для v2)
+        if (is_array($params)) {
+            $familyCount = 0;
+            foreach ($params as $key => $value) {
+                if ($key === 'family') {
+                    if (is_array($value)) {
+                        $familyCount += count($value);
+                    } else {
+                        $familyCount++;
+                    }
+                }
+            }
+            if ($familyCount > 3) { // API v2 лучше справляется с множественными семействами
+                return true;
+            }
         }
         
         return false;
@@ -301,12 +432,38 @@ class GoogleFontsProxy {
         $normalizedUA = $this->normalizeUserAgent(
             isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
         );
-        
         $fontFormat = $this->detectFontExtension();
+        $shortLang = $this->getAcceptLanguage(); // Теперь возвращает короткий код языка
         
-        return md5($googleUrl . $normalizedUA . $fontFormat . $this->getAcceptLanguage());
+        // Дополнительная нормализация URL для лучшего кэширования
+        $normalizedUrl = $this->normalizeGoogleFontsUrl($googleUrl);
+        
+        return md5($normalizedUrl . $normalizedUA . $fontFormat . $shortLang);
     }
-       
+
+    private function normalizeGoogleFontsUrl($url) {
+        $parsed = parse_url($url);
+        if (!$parsed || !isset($parsed['query'])) {
+            return $url;
+        }
+        
+        parse_str($parsed['query'], $params);
+        
+        // Сортировка параметров для консистентного кэширования
+        ksort($params);
+        
+        // Нормализация family параметров
+        if (isset($params['family'])) {
+            if (is_array($params['family'])) {
+                sort($params['family']);
+            }
+        }
+        
+        $normalizedQuery = http_build_query($params);
+        
+        return $parsed['scheme'] . '://' . $parsed['host'] . $parsed['path'] . '?' . $normalizedQuery;
+    }
+      
     private function fetchGoogleCSS($url) {
         if (function_exists('curl_init')) {
             return $this->fetchWithCurl($url);
@@ -1092,7 +1249,18 @@ class GoogleFontsProxy {
     }
     
     private function getAcceptLanguage() {
-        return isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? $_SERVER['HTTP_ACCEPT_LANGUAGE'] : 'en-US,en;q=0.9';
+        if (!isset($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
+            return 'en';
+        }
+        
+        $acceptLang = $_SERVER['HTTP_ACCEPT_LANGUAGE'];
+        
+        // Извлекаем только основной язык (первые 2 символа)
+        if (preg_match('/^([a-z]{2})/i', $acceptLang, $matches)) {
+            return strtolower($matches[1]);
+        }
+        
+        return 'en'; // Fallback
     }
     
     private function getReferer() {
@@ -1203,9 +1371,7 @@ class GoogleFontsProxy {
             ),
             'detected_font_format' => $this->detectFontExtension(),
             'cache_stats' => $this->getCacheStats(),
-            'parallel_download' => 'enabled',
             'curl_multi_support' => function_exists('curl_multi_init'),
-            'max_parallel_downloads' => 8,
             'download_method' => function_exists('curl_multi_init') ? 'curl_multi' : 'sequential'            
         ];
         

@@ -1248,25 +1248,20 @@ class GoogleFontsProxy {
         }
     }
     
-    private function getAcceptLanguage(): string
-    {
+    private function getAcceptLanguage(){
         if (empty($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
             return 'en';
         }
 
-        $primaryTags = [];
+        $languages = [];
         foreach (explode(',', $_SERVER['HTTP_ACCEPT_LANGUAGE']) as $part) {
-            // "en-US;q=0.8"  → ["en-US", ...]
-            $tag = strtolower(trim(explode(';', $part, 2)[0]));
-            $primary = substr($tag, 0, 2);     // "en" из "en-US", "ja" из "ja-JP"
-            if (!in_array($primary, $primaryTags, true)) {
-                $primaryTags[] = $primary;
+            $tag = trim(explode(';', $part, 2)[0]);
+            if (!empty($tag) && preg_match('/^[a-z]{2}(-[A-Z]{2})?$/i', $tag)) {
+                $languages[] = strtolower($tag);
             }
         }
-
-        return $primaryTags
-            ? implode(',', $primaryTags)
-            : 'en';
+        
+        return $languages ? implode(',', array_unique($languages)) : 'en';
     }
    
     private function getReferer() {

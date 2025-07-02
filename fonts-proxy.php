@@ -23,19 +23,10 @@ class GoogleFontsProxy {
     
     const TEMP_FILE_PREFIX = '.tmp_'; // Префикс временных файлов
     const LOCK_FILE_PREFIX = '.lock_'; // Префикс файлов-блокировок
-    
-    
+            
     // Кэш в памяти для избежания повторных операций
     private static $memoryCache = [];
-    
-    private static $modernBrowsers = [
-        'chrome', 'firefox', 'safari', 'edge', 'opera'
-    ];
-
-    private static $legacyBrowsers = [
-        'ie', 'trident'
-    ];
-    
+       
     private static $fileValidationCache = [];
     
     const VARIABLE_FONT_AXES = [
@@ -429,16 +420,13 @@ class GoogleFontsProxy {
      * Полная генерация нормализованного ключа кэша
      */
     private function generateCacheKey($googleUrl) {
-        $normalizedUA = $this->normalizeUserAgent(
-            isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
-        );
         $fontFormat = $this->detectFontExtension();
         $shortLang = $this->getAcceptLanguage(); // Теперь возвращает короткий код языка
         
         // Дополнительная нормализация URL для лучшего кэширования
         $normalizedUrl = $this->normalizeGoogleFontsUrl($googleUrl);
         
-        return md5($normalizedUrl . $normalizedUA . $fontFormat . $shortLang);
+        return md5($normalizedUrl . $fontFormat . $shortLang);
     }
 
     private function normalizeGoogleFontsUrl($url) {
@@ -945,51 +933,218 @@ class GoogleFontsProxy {
     }
     
     /**
-     * Улучшенное определение формата шрифта
+     * Определяет оптимальный формат шрифта на основе User-Agent
+     * версия с точной детекцией поддержки WOFF2
      */
     private function detectFontExtension() {
+        static $cachedResult = null;
+        
+        if ($cachedResult !== null) {
+            return $cachedResult;
+        }
+        
         $userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? strtolower($_SERVER['HTTP_USER_AGENT']) : '';
         
-        // Проверяем поддержку современных форматов
-        $supportsWoff2 = false;
-        $supportsVariableFonts = false;
+        // Если User-Agent пустой, возвращаем наиболее совместимый формат
+        if (empty($userAgent)) {
+            $cachedResult = 'woff';
+            return $cachedResult;
+        }
         
-        foreach (self::$modernBrowsers as $browser) {
-            if (strpos($userAgent, $browser) !== false) {
-                $supportsWoff2 = true;
-                break;
+        // Детальная проверка поддержки WOFF2
+        $supportsWoff2 = $this->checkWoff2Support($userAgent);
+        
+        // Выбор оптимального формата
+        $cachedResult = $supportsWoff2 ? 'woff2' : 'woff';
+        
+        return $cachedResult;
+    }
+
+    /**
+     * Проверяет поддержку WOFF2 на основе User-Agent
+     * Основано на актуальных данных поддержки браузеров (2024)
+     */
+    private function checkWoff2Support($userAgent) {
+        // Chrome и Chromium-based браузеры (включая новый Edge, Opera, Vivaldi, Brave)
+        if (preg_match('/(?:chrome|chromium)\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 36; // Chrome 36+ (июль 2014)
+        }
+        
+        // Firefox и Firefox-based браузеры
+        if (preg_match('/firefox\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 39; // Firefox 39+ (июль 2015)
+        }
+        
+        // Safari (сложная логика из-за версионирования WebKit)
+        if (strpos($userAgent, 'safari') !== false && strpos($userAgent, 'chrome') === false) {
+            // Safari на macOS
+            if (preg_match('/version\/(\d+)(?:\.(\d+))?/i', $userAgent, $matches)) {
+                $majorVersion = (int)$matches[1];
+                return $majorVersion >= 10; // Safari 10+ (сентябрь 2016)
+            }
+            
+            // Safari на iOS
+            if (preg_match('/os (\d+)_(\d+)/i', $userAgent, $matches)) {
+                $majorVersion = (int)$matches[1];
+                return $majorVersion >= 10; // iOS 10+ (сентябрь 2016)
+            }
+            
+            // WebKit без версии Safari (обычно современный)
+            if (preg_match('/webkit\/(\d+)/i', $userAgent, $matches)) {
+                return (int)$matches[1] >= 537; // WebKit 537+ (примерно Safari 10+)
             }
         }
         
-        // Дополнительные проверки для современных браузеров
-        if (!$supportsWoff2) {
-            // Проверяем версии браузеров с поддержкой woff2
-            if (preg_match('/chrome\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 36) {
-                $supportsWoff2 = true;
-                if ($matches[1] >= 62) {
-                    $supportsVariableFonts = true;
+        // Microsoft Edge (Legacy)
+        if (preg_match('/edge\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 14; // Edge 14+ (август 2016)
+        }
+        
+        // Microsoft Edge на Chromium (новый Edge)
+        if (preg_match('/edg\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 79; // Edge Chromium 79+ (январь 2020)
+        }
+        
+        // Opera (старая версия с отдельным движком)
+        if (preg_match('/opera.*version\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 26; // Opera 26+ (декабрь 2014)
+        }
+        
+        // Opera на Chromium (новая Opera)
+        if (preg_match('/opr\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 23; // Opera 23+ (июль 2014)
+        }
+        
+        // Samsung Internet Browser (популярен на Android Samsung)
+        if (preg_match('/samsungbrowser\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 4; // Samsung Internet 4+ (2016)
+        }
+        
+        // UC Browser (популярен в Азии)
+        if (preg_match('/ucbrowser\/(\d+)(?:\.(\d+))?/i', $userAgent, $matches)) {
+            $majorVersion = (int)$matches[1];
+            $minorVersion = isset($matches[2]) ? (int)$matches[2] : 0;
+            
+            // UC Browser 11.8+ поддерживает WOFF2
+            if ($majorVersion > 11) return true;
+            if ($majorVersion == 11 && $minorVersion >= 8) return true;
+            
+            return false;
+        }
+        
+        // Yandex Browser (популярен в России/СНГ)
+        if (preg_match('/yabrowser\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 16; // Yandex Browser 16+ (2016)
+        }
+        
+        // QQ Browser (популярен в Китае)
+        if (preg_match('/qqbrowser\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 9; // QQ Browser 9+ (2016)
+        }
+        
+        // Sogou Explorer (популярен в Китае)
+        if (preg_match('/se.*metasr/i', $userAgent)) {
+            // Современные версии Sogou основаны на Chromium
+            if (preg_match('/chrome\/(\d+)/i', $userAgent, $matches)) {
+                return (int)$matches[1] >= 36;
+            }
+            return false;
+        }
+        
+        // Android WebView
+        if (strpos($userAgent, 'android') !== false) {
+            // Современный Android WebView
+            if (strpos($userAgent, 'wv') !== false) {
+                if (preg_match('/chrome\/(\d+)/i', $userAgent, $matches)) {
+                    return (int)$matches[1] >= 36; // Android WebView с Chrome 36+
                 }
-            } elseif (preg_match('/firefox\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 39) {
-                $supportsWoff2 = true;
-                if ($matches[1] >= 62) {
-                    $supportsVariableFonts = true;
-                }
-            } elseif (strpos($userAgent, 'safari') !== false && strpos($userAgent, 'version/') !== false) {
-                if (preg_match('/version\/(\d+)/i', $userAgent, $matches) && $matches[1] >= 10) {
-                    $supportsWoff2 = true;
-                    if ($matches[1] >= 11) {
-                        $supportsVariableFonts = true;
+            }
+            
+            // Старый Android Browser (до Android 4.4)
+            if (preg_match('/android (\d+)(?:\.(\d+))?/i', $userAgent, $matches)) {
+                $majorVersion = (int)$matches[1];
+                $minorVersion = isset($matches[2]) ? (int)$matches[2] : 0;
+                
+                // Android 5.0+ обычно имеет современный WebView
+                if ($majorVersion >= 5) return true;
+                if ($majorVersion == 4 && $minorVersion >= 4) return true;
+                
+                return false;
+            }
+        }
+        
+        // Vivaldi Browser
+        if (preg_match('/vivaldi\/(\d+)/i', $userAgent, $matches)) {
+            return (int)$matches[1] >= 1; // Все версии Vivaldi поддерживают WOFF2
+        }
+        
+        // Brave Browser
+        if (strpos($userAgent, 'brave') !== false) {
+            return true; // Все версии Brave поддерживают WOFF2
+        }
+        
+        // DuckDuckGo Browser
+        if (strpos($userAgent, 'duckduckgo') !== false) {
+            return true; // Современный браузер на WebKit
+        }
+        
+        // Проверка на заведомо старые браузеры без поддержки WOFF2
+        $legacyPatterns = [
+            '/msie [1-9]\./i',           // Internet Explorer 9 и младше
+            '/msie 1[01]\./i',           // Internet Explorer 10-11
+            '/trident\/[1-6]\./i',       // Trident 6 и младше (IE 10 и младше)
+            '/opera.*presto/i',          // Старая Opera на движке Presto
+            '/netscape/i',               // Netscape
+            '/konqueror/i',              // Konqueror (старые версии)
+        ];
+        
+        foreach ($legacyPatterns as $pattern) {
+            if (preg_match($pattern, $userAgent)) {
+                return false;
+            }
+        }
+        
+        // Дополнительная проверка для неизвестных браузеров
+        // Если браузер содержит современные движки, скорее всего поддерживает WOFF2
+        $modernEnginePatterns = [
+            '/webkit\/(\d+)/i',          // WebKit
+            '/gecko\/(\d+)/i',           // Gecko (Firefox)
+            '/blink/i',                  // Blink (Chrome/Opera)
+        ];
+        
+        foreach ($modernEnginePatterns as $pattern) {
+            if (preg_match($pattern, $userAgent, $matches)) {
+                // Проверяем версию движка если есть
+                if (isset($matches[1])) {
+                    $engineVersion = (int)$matches[1];
+                    // WebKit 537+ обычно поддерживает WOFF2
+                    if (strpos($pattern, 'webkit') !== false && $engineVersion >= 537) {
+                        return true;
+                    }
+                    // Gecko 39+ поддерживает WOFF2
+                    if (strpos($pattern, 'gecko') !== false && $engineVersion >= 39) {
+                        return true;
                     }
                 }
+                
+                // Blink всегда поддерживает WOFF2
+                if (strpos($pattern, 'blink') !== false) {
+                    return true;
+                }
             }
         }
         
-        // Приоритет современным форматам
-        if ($supportsVariableFonts) {
-            return 'woff2'; // Variable fonts обычно в woff2
+        // Эвристическая проверка по году в User-Agent
+        // Браузеры 2015+ года обычно поддерживают WOFF2
+        if (preg_match('/20(1[5-9]|2[0-9]|3[0-9])/i', $userAgent)) {
+            // Дополнительно проверяем, что это не заведомо старый браузер
+            if (!preg_match('/msie|trident/i', $userAgent)) {
+                return true;
+            }
         }
         
-        return $supportsWoff2 ? 'woff2' : 'woff';
+        // По умолчанию считаем, что WOFF2 поддерживается
+        return true;
     }
     
     private function sanitizeFileName($fileName) {
@@ -1211,43 +1366,7 @@ class GoogleFontsProxy {
         
         return implode("\n", $fallback);
     }
-       
-    /**
-     * Нормализует User-Agent для единого кэширования современных браузеров
-     */
-    private function normalizeUserAgent($userAgent) {
-        $userAgent = strtolower($userAgent);
-        
-        // Определяем тип браузера
-        $isModern = false;
-        $isLegacy = false;
-        
-        foreach (self::$modernBrowsers as $browser) {
-            if (strpos($userAgent, $browser) !== false) {
-                $isModern = true;
-                break;
-            }
-        }
-        
-        if (!$isModern) {
-            foreach (self::$legacyBrowsers as $browser) {
-                if (strpos($userAgent, $browser) !== false) {
-                    $isLegacy = true;
-                    break;
-                }
-            }
-        }
-        
-        // Возвращаем нормализованный User-Agent
-        if ($isModern || (!$isModern && !$isLegacy)) {
-            // Современные браузеры получают единый UA для woff2
-            return 'Mozilla/5.0 Modern Browser (woff2 support)';
-        } else {
-            // Старые браузеры получают отдельный UA для woff
-            return 'Mozilla/5.0 Legacy Browser (woff support)';
-        }
-    }
-    
+           
     private function getAcceptLanguage(){
         if (empty($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
             return 'en';
@@ -1367,9 +1486,6 @@ class GoogleFontsProxy {
             'css_cache_files' => count(glob($this->cacheDir . '*.css')),
             'font_cache_files' => count(glob($this->fontsDir . '*')),
             'cache_normalization' => 'enabled',
-            'user_agent_normalized' => $this->normalizeUserAgent(
-                isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''
-            ),
             'detected_font_format' => $this->detectFontExtension(),
             'cache_stats' => $this->getCacheStats(),
             'curl_multi_support' => function_exists('curl_multi_init'),

@@ -1254,41 +1254,21 @@ class GoogleFontsProxy {
             return 'en';
         }
 
-        $langs = [];
-        $i = 0;
+        $primaryTags = [];
         foreach (explode(',', $_SERVER['HTTP_ACCEPT_LANGUAGE']) as $part) {
-            $i++;
-            $segments = explode(';q=', trim($part), 2);
-            $tag     = strtolower(trim($segments[0])); 
-            $q       = isset($segments[1]) ? (float)$segments[1] : 1.0;
-            $primary = substr($tag, 0, 2);
-
-            // Если уже есть с большим q — пропускаем,
-            // если с тем же q — не перезаписываем (сохраним меньший index)
-            if (isset($langs[$primary])) {
-                list($existingQ, $existingIndex) = $langs[$primary];
-                if ($q < $existingQ || ($q === $existingQ && $i > $existingIndex)) {
-                    continue;
-                }
+            // "en-US;q=0.8"  → ["en-US", ...]
+            $tag = strtolower(trim(explode(';', $part, 2)[0]));
+            $primary = substr($tag, 0, 2);     // "en" из "en-US", "ja" из "ja-JP"
+            if (!in_array($primary, $primaryTags, true)) {
+                $primaryTags[] = $primary;
             }
-
-            $langs[$primary] = [$q, $i];
         }
 
-        // Сортируем: сначала по q DESC, потом by index ASC
-        uasort($langs, function($a, $b) {
-            if ($a[0] !== $b[0]) {
-                return ($a[0] > $b[0]) ? -1 : 1;
-            }
-            return ($a[1] < $b[1]) ? -1 : 1;
-        });
-
-        $result = array_keys($langs);
-        return empty($result) ? 'en' : implode(',', $result);
+        return $primaryTags
+            ? implode(',', $primaryTags)
+            : 'en';
     }
-
-
-    
+   
     private function getReferer() {
         if (isset($_SERVER['HTTP_REFERER'])) {
             return $_SERVER['HTTP_REFERER'];

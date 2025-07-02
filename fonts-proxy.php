@@ -11,7 +11,7 @@
 const CACHE_CSS_DIR = 'cache/css/'; // Кастомный путь для кеша CSS
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
-const ADMIN_ACTIONS = true; // Административные команды
+const ADMIN_ACTIONS = false; // Административные команды
 const MAX_PARALLEL = 32; // Максимум одновременных соединений
 
 class GoogleFontsProxy {

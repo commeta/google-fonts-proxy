@@ -1255,34 +1255,38 @@ class GoogleFontsProxy {
         }
 
         $langs = [];
-        // Разбиваем по запятой
+        $i = 0;
         foreach (explode(',', $_SERVER['HTTP_ACCEPT_LANGUAGE']) as $part) {
-            // part может быть вида "en-US;q=0.8" или "ja"
+            $i++;
             $segments = explode(';q=', trim($part), 2);
-            $tag = strtolower(trim($segments[0]));            // e.g. "en-us"
-            $q   = isset($segments[1]) ? (float)$segments[1] : 1.0; // q=0..1
+            $tag     = strtolower(trim($segments[0])); 
+            $q       = isset($segments[1]) ? (float)$segments[1] : 1.0;
+            $primary = substr($tag, 0, 2);
 
-            $primary = substr($tag, 0, 2); // "en" из "en-us", "ja" из "ja"
-
-            // сохраняем только самый высокий q для каждого primary
-            if (!isset($langs[$primary]) || $langs[$primary] < $q) {
-                $langs[$primary] = $q;
+            // Если уже есть с большим q — пропускаем,
+            // если с тем же q — не перезаписываем (сохраним меньший index)
+            if (isset($langs[$primary])) {
+                list($existingQ, $existingIndex) = $langs[$primary];
+                if ($q < $existingQ || ($q === $existingQ && $i > $existingIndex)) {
+                    continue;
+                }
             }
+
+            $langs[$primary] = [$q, $i];
         }
 
-        // Сортируем по убыванию q, сохраняя ключи
-        arsort($langs);
+        // Сортируем: сначала по q DESC, потом by index ASC
+        uasort($langs, function($a, $b) {
+            if ($a[0] !== $b[0]) {
+                return ($a[0] > $b[0]) ? -1 : 1;
+            }
+            return ($a[1] < $b[1]) ? -1 : 1;
+        });
 
-        // Оставляем только ключи (primary tags)
         $result = array_keys($langs);
-
-        // Если получилось пусто — fallback
-        if (empty($result)) {
-            return 'en';
-        }
-
-        return implode(',', $result);
+        return empty($result) ? 'en' : implode(',', $result);
     }
+
 
     
     private function getReferer() {

@@ -321,19 +321,21 @@ curl "https://yourdomain.com/fonts-proxy.php?action=debug_performance"
     "cache_dir_exists": true,
     "fonts_dir_exists": true,
     "css_cache_files": 1,
-    "font_cache_files": 63,
+    "font_cache_files": 6,
     "cache_normalization": "enabled",
     "user_agent_normalized": "Mozilla/5.0 Modern Browser (woff2 support)",
     "detected_font_format": "woff2",
     "cache_stats": {
         "css_files": 1,
-        "font_files": 63,
-        "total_size": 1814126,
+        "font_files": 6,
+        "total_size": 264280,
         "cache_efficiency": "improved",
         "api_v2_support": true,
-        "total_size_mb": 1.73,
+        "total_size_mb": 0.25,
         "cache_hit_ratio": 100
-    }
+    },
+    "curl_multi_support": true,
+    "download_method": "curl_multi"
 }
 ```
 
@@ -368,6 +370,8 @@ const CACHE_CSS_DIR = 'cache/css/';     // Кастомный путь для к
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
 const ADMIN_ACTIONS = false;            // Административные команды
+const MAX_PARALLEL = 32;                // Максимум одновременных соединений
+
 ```
 
 Вы можете изменить следующие параметры в классе `GoogleFontsProxy`:
@@ -562,7 +566,7 @@ find cache/ -type f | wc -l
 1. **Инициализация** - Создание необходимых директорий и проверка окружения
 2. **Обработка запроса** - Валидация параметров и определение версии Google Fonts API
 3. **Кэширование CSS** - Проверка локального кэша с использованием блокировок для безопасности
-4. **Получение данных** - Запрос к Google Fonts API через cURL или file_get_contents
+4. **Получение данных** - Запрос к Google Fonts API через cURL Multi или file_get_contents
 5. **Обработка шрифтов** - Извлечение URL шрифтов, их загрузка и кэширование
 6. **Оптимизация** - Замена внешних URL на локальные пути в CSS
 7. **Вывод результата** - Отправка готового CSS с соответствующими HTTP заголовками

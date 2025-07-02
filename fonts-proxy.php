@@ -487,7 +487,7 @@ class GoogleFontsProxy {
             CURLOPT_USERAGENT => $this->getRealUserAgent(),
             CURLOPT_HTTPHEADER => [
                 'Accept: text/css,*/*;q=0.1',
-                'Accept-Language: ' . $_SERVER['HTTP_ACCEPT_LANGUAGE'],
+                'Accept-Language: ' . $this->getAcceptLanguage(),
                 'Accept-Encoding: gzip, deflate, br',
                 'Connection: keep-alive',
                 'Cache-Control: no-cache'
@@ -521,7 +521,7 @@ class GoogleFontsProxy {
                 'header' => [
                     'User-Agent: ' . $this->getRealUserAgent(),
                     'Accept: text/css,*/*;q=0.1',
-                    'Accept-Language: ' . $_SERVER['HTTP_ACCEPT_LANGUAGE'],
+                    'Accept-Language: ' . $this->getAcceptLanguage(),
                     'Accept-Encoding: gzip, deflate, br',
                     'Connection: keep-alive',
                     'Cache-Control: no-cache'

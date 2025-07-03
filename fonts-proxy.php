@@ -11,7 +11,6 @@
 const CACHE_CSS_DIR = 'cache/css/'; // Кастомный путь для кеша CSS
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
-const ADMIN_ACTIONS = true; // Административные команды
 const MAX_PARALLEL = 32; // Максимум одновременных соединений
 
 const MAX_CSS_FILES = 1000;    // Максимальное количество CSS файлов в кэше
@@ -1163,10 +1162,6 @@ class GoogleFontsProxy {
 
     private function isFileValidAndFresh($filePath) {
         if (!file_exists($filePath)) {
-            if (isset(self::$fileValidationCache[$cacheKey])) {
-                self::$fileValidationCache[$cacheKey] = false;
-            }
-            
             return false;
         }
         

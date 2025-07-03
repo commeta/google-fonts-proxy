@@ -14,8 +14,9 @@ const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстано�
 const MAX_PARALLEL = 64; // Максимум одновременных соединений
 
 const MAX_CSS_FILES = 1024;    // Максимальное количество CSS файлов в кэше
-const MAX_FONT_FILES = 32768;   // Максимальное количество файлов шрифтов в кэше
+const MAX_FONT_FILES = 8192;   // Максимальное количество файлов шрифтов в кэше
 
+const FONTS_FILES_MANIFEST = 'cache/fonts_manifest.json'; // Кастомный путь для файла манифест
 
 class GoogleFontsProxy {
     private $cacheDir;
@@ -152,7 +153,7 @@ class GoogleFontsProxy {
                 $processedCSS = $this->processCSS($css);
                 $this->saveCSSAtomic($cacheFile, $processedCSS);
                 $this->outputCSS($processedCSS);
-                
+                if(file_exists(FONTS_FILES_MANIFEST)) unlink(FONTS_FILES_MANIFEST);
             } finally {
                 $this->releaseLock($lockHandle, $lockFile);
             }
@@ -203,10 +204,16 @@ class GoogleFontsProxy {
         if (empty($fontFiles)) {
             return true; // Нет шрифтов для проверки
         }
+        
+        if(file_exists(FONTS_FILES_MANIFEST)) {
+            $font_files_set = json_decode(file_get_contents(FONTS_FILES_MANIFEST), true);
+        } else {
+            $font_files_set = $this->getFontFilesSet();
+        }
 
         // Проверяем существование каждого файла шрифта
         foreach ($fontFiles as $fontFile) {
-            if (!file_exists(CACHE_FONTS_DIR . $fontFile)) {
+            if (!isset($font_files_set[$fontFile])) {
                 return false;
             }
         }
@@ -214,6 +221,56 @@ class GoogleFontsProxy {
         return true;
     }
 
+
+    /**
+     * Получает быстрый набор (set) всех файлов шрифтов в кэше
+     * Использует array_flip для O(1) поиска по ключу
+     */
+    private function getFontFilesSet() {
+        if (!is_dir($this->fontsDir)) {
+            return [];
+        }
+        
+        $files = [];
+        $handle = opendir($this->fontsDir);
+        
+        if ($handle === false) {
+            return [];
+        }
+        
+        while (($file = readdir($handle)) !== false) {
+            if ($file === '.' || $file === '..') {
+                continue;
+            }
+            
+            $basename = basename($file);
+            // Исключаем временные и lock файлы
+            if (strpos($basename, self::TEMP_FILE_PREFIX) !== 0 && 
+                strpos($basename, self::LOCK_FILE_PREFIX) !== 0) {
+                
+                $fullPath = $this->fontsDir . $file;
+                if (is_file($fullPath) && filesize($fullPath) > 0) {
+                    $files[$file] = true; // Используем ключ для быстрого поиска
+                }
+            }
+        }
+        
+        closedir($handle);
+        
+        try {
+            if (file_put_contents(FONTS_FILES_MANIFEST, json_encode($files, JSON_UNESCAPED_SLASHES), LOCK_EX) === false) {
+                throw new Exception('Не удалось записать файл списка файлов шрифтов');
+            }
+            
+            @chmod(FONTS_FILES_MANIFEST, 0644);
+            
+        } catch (Exception $e) {
+            @unlink(FONTS_FILES_MANIFEST);
+            throw $e;
+        }
+        
+        return $files;
+    }
 
     /**
      * извлечение имен файлов шрифтов из CSS
@@ -1421,37 +1478,8 @@ class GoogleFontsProxy {
             for ($i = 0; $i < $filesToDelete; $i++) {
                 @unlink($validFiles[$i]);
             }
-            
-            error_log("Google Fonts Proxy: Ротация кэша - удалено {$filesToDelete} файлов из {$dir}");
         }
-    }
-
-    /**
-     * Быстрый подсчет файлов в директории (для отладки/мониторинга)
-     */
-    private function countFilesInDirectory($dir, $pattern = '*') {
-        if (!is_dir($dir)) {
-            return 0;
-        }
-        
-        $files = glob($dir . $pattern);
-        if (!$files) {
-            return 0;
-        }
-        
-        $count = 0;
-        foreach ($files as $file) {
-            $basename = basename($file);
-            if (is_file($file) && 
-                strpos($basename, self::TEMP_FILE_PREFIX) !== 0 && 
-                strpos($basename, self::LOCK_FILE_PREFIX) !== 0) {
-                $count++;
-            }
-        }
-        
-        return $count;
-    }
-    
+    }    
 }
 
 

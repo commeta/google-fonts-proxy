@@ -434,19 +434,17 @@ curl "https://yourdomain.com/fonts-proxy.php?action=debug_performance"
     "memory_peak": 2097152,
     "cache_dir_exists": true,
     "fonts_dir_exists": true,
-    "css_cache_files": 1,
-    "font_cache_files": 6,
+    "css_cache_files": 11,
+    "font_cache_files": 63,
     "cache_normalization": "enabled",
-    "user_agent_normalized": "Mozilla/5.0 Modern Browser (woff2 support)",
     "detected_font_format": "woff2",
     "cache_stats": {
-        "css_files": 1,
-        "font_files": 6,
-        "total_size": 264280,
+        "css_files": 11,
+        "font_files": 63,
+        "total_size": 1693255,
         "cache_efficiency": "improved",
         "api_v2_support": true,
-        "total_size_mb": 0.25,
-        "cache_hit_ratio": 100
+        "total_size_mb": 1.61
     },
     "curl_multi_support": true,
     "download_method": "curl_multi"
@@ -462,13 +460,12 @@ curl "https://yourdomain.com/fonts-proxy.php?action=cache_stats"
 Пример ответа:
 ```json
 {
-    "css_files": 1,
+    "css_files": 11,
     "font_files": 63,
-    "total_size": 1814126,
+    "total_size": 1693255,
     "cache_efficiency": "improved",
     "api_v2_support": true,
-    "total_size_mb": 1.73,
-    "cache_hit_ratio": 100
+    "total_size_mb": 1.61
 }
 ```
 
@@ -542,15 +539,15 @@ location ~ ^/fonts-proxy\.php$ {
 
 - **Кэш в памяти** - предотвращает повторные файловые операции в одном запросе
 - **Быстрая проверка кэша** - приоритетная проверка существующих файлов через `stat()`
-- **Нормализация User-Agent** - эффективное кэширование для современных и старых браузеров
+- **Определение браузера по User-Agent** - эффективное кэширование для современных и старых браузеров
 - **Пакетная проверка файлов** - единовременная проверка существования шрифтов
 - **Оптимизированные регулярные выражения** - компиляция паттернов один раз
 - **ETag поддержка** - предотвращение повторной передачи неизмененного контента
 - **Умное определение формата** - автоматический выбор WOFF2/WOFF
 
-### Алгоритм нормализации User-Agent
+### Алгоритм определения браузера по User-Agent
 
-Скрипт использует интеллектуальную нормализацию User-Agent для оптимизации кэширования:
+Скрипт использует интеллектуальную проверку User-Agent для оптимизации кэширования:
 
 - **Современные браузеры** (Chrome, Firefox, Safari, Edge, Opera) → единый нормализованный UA для WOFF2
 - **Старые браузеры** (IE, старые версии) → отдельный UA для WOFF
@@ -646,14 +643,9 @@ find cache/ -type f | wc -l
 
 ### Реализованные меры защиты
 
-- ✅ Валидация всех входящих параметров
-- ✅ Санитизация имен файлов и URL
-- ✅ Защита от path traversal атак
+- ✅ Санитизация имен файлов
 - ✅ Проверка SSL сертификатов
-- ✅ Ограничение размера параметров (500 символов)
 - ✅ Безопасная работа с временными файлами
-- ✅ Защита от инъекций в регулярных выражениях
-- ✅ Валидация сгенерированных локальных URL
 - ✅ Race Condition при создании файлов кэша
 
 

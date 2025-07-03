@@ -11,7 +11,7 @@
 const CACHE_CSS_DIR = 'cache/css/'; // Кастомный путь для кеша CSS
 const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для кеша шрифтов
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
-const ADMIN_ACTIONS = false; // Административные команды
+const ADMIN_ACTIONS = true; // Административные команды
 const MAX_PARALLEL = 32; // Максимум одновременных соединений
 
 class GoogleFontsProxy {
@@ -28,20 +28,6 @@ class GoogleFontsProxy {
     private static $memoryCache = [];
        
     private static $fileValidationCache = [];
-    
-    const VARIABLE_FONT_AXES = [
-        'wght' => ['min' => 1, 'max' => 1000],      // Weight
-        'wdth' => ['min' => 25, 'max' => 200],      // Width
-        'opsz' => ['min' => 6, 'max' => 288],       // Optical Size
-        'slnt' => ['min' => -90, 'max' => 90],      // Slant
-        'ital' => ['min' => 0, 'max' => 1],         // Italic
-        'GRAD' => ['min' => -200, 'max' => 150],    // Grade
-        'CASL' => ['min' => 0, 'max' => 1],         // Casual
-        'CRSV' => ['min' => 0, 'max' => 1],         // Cursive
-        'MONO' => ['min' => 0, 'max' => 1],         // Monospace
-        'SOFT' => ['min' => 0, 'max' => 100],       // Softness
-        'WONK' => ['min' => 0, 'max' => 1],         // Wonky
-    ];    
     
     public function __construct() {
         // Директории для кэша с использованием констант
@@ -111,60 +97,66 @@ class GoogleFontsProxy {
                 throw new Exception('Не переданы параметры для Google Fonts');
             }
             
-            $queryParams = $this->validateAndSanitizeParams($_GET);
-            $googleUrl = $this->buildGoogleFontsUrl($queryParams);
-            
+            $qs= $this->maybeRawUrlDecode($_SERVER['QUERY_STRING']);
+
+            if (preg_match('/(?:^|&)api=(\d+)(?:&|$)/', $qs, $m)) {
+                $api = (int)$m[1];
+            } else {
+                $api = 1;
+            }
+
+            $query = preg_replace('/(?:^|&)?api=\d+(?:&|$)/', '', $qs);
+            $query = trim($query, '&');
+
+            $googleUrl = $this->buildGoogleFontsUrl($query, $api);
             $cacheKey = $this->generateCacheKey($googleUrl);
             $cacheFile = $this->cacheDir . $cacheKey . '.css';
             $lockFile = $this->cacheDir . self::LOCK_FILE_PREFIX . $cacheKey . '.css';
-            
-            // Быстрая проверка кэша
+
             if ($this->isCSSCacheValid($cacheFile)) {
                 $this->outputCachedCSS($cacheFile);
                 return;
             }
-            
-            // Получаем блокировку для генерации CSS
+
             $lockHandle = $this->acquireExclusiveLock($lockFile);
             if (!$lockHandle) {
-                // Если не удалось получить блокировку, проверяем кэш еще раз
                 if ($this->isCSSCacheValid($cacheFile)) {
                     $this->outputCachedCSS($cacheFile);
                     return;
                 }
                 throw new Exception('Не удалось получить блокировку для CSS кэша');
             }
-            
+
             try {
-                // Двойная проверка после получения блокировки
                 if ($this->isCSSCacheValid($cacheFile)) {
                     $this->outputCachedCSS($cacheFile);
                     return;
                 }
-                
-                // Запрашиваем CSS от Google
+
                 $css = $this->fetchGoogleCSS($googleUrl);
                 if ($css === false) {
                     throw new Exception('Не удалось получить CSS от Google Fonts');
                 }
-                
-                // Обрабатываем CSS и загружаем шрифты
+
                 $processedCSS = $this->processCSS($css);
-                
-                // Атомарно сохраняем в кэш
                 $this->saveCSSAtomic($cacheFile, $processedCSS);
-                
-                // Выводим CSS
                 $this->outputCSS($processedCSS);
-                
             } finally {
                 $this->releaseLock($lockHandle, $lockFile);
             }
-            
         } catch (Exception $e) {
             $this->handleError($e);
         }
     }
+
+    public function maybeRawUrlDecode($s) {
+        // Ищем любую %XX (X — шестнадцатеричный символ)
+        if (preg_match('/%[0-9A-Fa-f]{2}/', $s)) {
+            return rawurldecode($s);
+        }
+        return $s;
+    }
+   
     
     /**
      * Быстрое чтение и вывод кэшированного CSS без лишних операций
@@ -180,276 +172,36 @@ class GoogleFontsProxy {
         }
     }
         
-    /**
-     * валидация параметров с поддержкой всех v2 форматов
-     */
-    private function validateAndSanitizeParams($params) {
-        $allowedParams = [
-            'family', 'subset', 'display', 'text',
-            'axes', 'variable', 'italic', 'weight',
-            'effect', 'callback'
-        ];
-        
-        $sanitized = [];
-        
-        // Специальная обработка family параметра
-        if (isset($params['family'])) {
-            if (is_array($params['family'])) {
-                $sanitized['family'] = [];
-                foreach ($params['family'] as $family) {
-                    $cleanFamily = $this->sanitizeGoogleFontsParamV2($family);
-                    if ($this->validateFamilyString($cleanFamily)) {
-                        $sanitized['family'][] = $cleanFamily;
-                    }
-                }
-            } else {
-                $cleanFamily = $this->sanitizeGoogleFontsParamV2($params['family']);
-                if ($this->validateFamilyString($cleanFamily)) {
-                    $sanitized['family'] = $cleanFamily;
-                }
-            }
-            unset($params['family']);
-        }
-        
-        // Обработка остальных параметров
-        foreach ($params as $key => $value) {
-            if (in_array($key, $allowedParams)) {
-                if (is_array($value)) {
-                    $sanitized[$key] = array_map([$this, 'sanitizeGoogleFontsParamV2'], $value);
-                } else {
-                    $sanitized[$key] = $this->sanitizeGoogleFontsParamV2($value);
-                }
-            }
-        }
-        
-        if (empty($sanitized)) {
-            throw new Exception('Не найдены валидные параметры');
-        }
-        
-        return $sanitized;
-    }
-
-    private function validateFamilyString($familyString) {
-        // Базовая валидация
-        if (empty($familyString) || strlen($familyString) > 2000) {
-            return false;
-        }
-        
-        // Проверка на подозрительные паттерны
-        $suspiciousPatterns = [
-            '/\.\.\.|_{3,}|-{3,}/',  // Множественные точки, подчеркивания, дефисы
-            '/[<>{}()\/\\]/',        // Подозрительные символы
-            '/javascript:|data:|vbscript:/i' // Потенциально опасный контент
-        ];
-        
-        foreach ($suspiciousPatterns as $pattern) {
-            if (preg_match($pattern, $familyString)) {
-                return false;
-            }
-        }
-        
-        return true;
-    }
-
-    /**
-     * Расширенная санитизация для Google Fonts API v2
-     */
-    private function sanitizeGoogleFontsParamV2($value) {
-        // Расширенный набор разрешенных символов для API v2
-        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=@#\[\]\.]+/', '', $value);
-        
-        // Валидация диапазонов в переменных шрифтах
-        if (preg_match('/(\d+)\.\.(\d+)/', $value, $matches)) {
-            $min = (int)$matches[1];
-            $max = (int)$matches[2];
-            
-            // Проверка корректности диапазонов для различных осей
-            if (strpos($value, 'wght@') !== false) {
-                // Weight: 1-1000
-                $min = max(1, min(1000, $min));
-                $max = max(1, min(1000, $max));
-            } elseif (strpos($value, 'wdth@') !== false) {
-                // Width: 25-200%
-                $min = max(25, min(200, $min));
-                $max = max(25, min(200, $max));
-            } elseif (strpos($value, 'opsz@') !== false) {
-                // Optical size: 6-288pt
-                $min = max(6, min(288, $min));
-                $max = max(6, min(288, $max));
-            } elseif (strpos($value, 'slnt@') !== false) {
-                // Slant: -90 to 90 degrees
-                $min = max(-90, min(90, $min));
-                $max = max(-90, min(90, $max));
-            }
-            
-            if ($min >= $max) {
-                $max = $min + 1; // Исправление некорректных диапазонов
-            }
-            
-            $value = str_replace($matches[0], $min . '..' . $max, $value);
-        }
-        
-        return substr(trim($value), 0, 2000); // Увеличен лимит для сложных параметров v2
-    } 
 
     /**
      * Определяет версию Google Fonts API и формирует правильный URL
      */
-    private function buildGoogleFontsUrl($params) {
-        $isApiV2 = $this->detectApiV2($params);
+    private function buildGoogleFontsUrl($params, $apiVersion = 1) {
+        parse_str($params, $p);
         
-        if ($isApiV2) {
-            // API v2 требует специальной обработки family параметров
-            $processedParams = $this->processV2Params($params);
-            return 'https://fonts.googleapis.com/css2?' . http_build_query($processedParams);
+        $queryString = http_build_query(
+            $p,
+            '',        // разделитель для числовых ключей
+            '&',       // разделитель пар
+            PHP_QUERY_RFC3986 // заставит rawurlencode() для всех спецсимволов
+        );
+        
+        if ($apiVersion === 2) {
+            return 'https://fonts.googleapis.com/css2?' . $queryString;
         } else {
-            // API v1
-            return 'https://fonts.googleapis.com/css?' . http_build_query($params);
+            return 'https://fonts.googleapis.com/css?' . $queryString;
         }
-    }
-
-    private function processV2Params($params) {
-        $processed = [];
-        
-        foreach ($params as $key => $value) {
-            if ($key === 'family') {
-                if (is_array($value)) {
-                    // Множественные семейства для API v2
-                    foreach ($value as $family) {
-                        $processed['family'][] = $this->optimizeV2FamilyString($family);
-                    }
-                } else {
-                    $processed['family'] = $this->optimizeV2FamilyString($value);
-                }
-            } else {
-                $processed[$key] = $value;
-            }
-        }
-        
-        return $processed;
-    }
-
-    private function optimizeV2FamilyString($familyString) {
-        // Удаление дублирующихся весов и стилей
-        if (preg_match('/^([^:]+):([^@]+)@(.+)$/', $familyString, $matches)) {
-            $familyName = $matches[1];
-            $axes = $matches[2];
-            $values = $matches[3];
-            
-            // Сортировка и дедупликация значений
-            $valueGroups = explode(';', $values);
-            $uniqueGroups = array_unique($valueGroups);
-            sort($uniqueGroups);
-            
-            return $familyName . ':' . $axes . '@' . implode(';', $uniqueGroups);
-        }
-        
-        return $familyString;
     }
 
     /**
-     * Определяет является ли запрос Google Fonts API v2
-     */
-    private function detectApiV2($params) {
-        // Явные индикаторы API v2
-        if (isset($params['axes']) || isset($params['variable']) || 
-            isset($params['weight']) || isset($params['italic'])) {
-            return true;
-        }
-        
-        // Проверка family параметров на синтаксис v2
-        if (isset($params['family'])) {
-            $families = is_array($params['family']) ? $params['family'] : [$params['family']];
-            
-            foreach ($families as $family) {
-                // Расширенные паттерны для API v2
-                $v2Patterns = [
-                    // Переменные шрифты с осями: Family:wght@100..900
-                    '/:[a-z,]+@[\d\.,;]+\.\.[\d\.,;]+/',
-                    // Именованные экземпляры: Family:ital,wght@0,400;1,700
-                    '/:[a-z,]+@[\d;,\.]+/',
-                    // Сложные комбинации осей: Family:ital,opsz,wght@0,14,400;1,14,700
-                    '/:[a-z,]+@(?:[\d\.,;]+;)*[\d\.,;]+/',
-                    // Новый синтаксис с дефисами: Family:wght@100-900
-                    '/:[a-z,]+-[\d\.,;-]+/',
-                    // Optical size axis: Family:opsz@8..144
-                    '/:opsz@[\d\.]+\.\.[\d\.]+/',
-                    // Width axis: Family:wdth@75..125
-                    '/:wdth@[\d\.]+\.\.[\d\.]+/',
-                    // Slant axis: Family:slnt@-15..0
-                    '/:slnt@-?[\d\.]+\.\.-?[\d\.]+/',
-                    // Grade axis: Family:GRAD@-200..150
-                    '/:GRAD@-?[\d\.]+\.\.-?[\d\.]+/'
-                ];
-                
-                foreach ($v2Patterns as $pattern) {
-                    if (preg_match($pattern, $family)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        
-        // Проверка на множественные family параметры (характерно для v2)
-        if (is_array($params)) {
-            $familyCount = 0;
-            foreach ($params as $key => $value) {
-                if ($key === 'family') {
-                    if (is_array($value)) {
-                        $familyCount += count($value);
-                    } else {
-                        $familyCount++;
-                    }
-                }
-            }
-            if ($familyCount > 3) { // API v2 лучше справляется с множественными семействами
-                return true;
-            }
-        }
-        
-        return false;
-    }
-    
-    private function sanitizeGoogleFontsParam($value) {
-        // Расширенная санитизация для API v2 (поддержка больше символов)
-        $value = preg_replace('/[^a-zA-Z0-9\s\-_+:;,.|&=@#]/', '', $value);
-        return substr(trim($value), 0, 1000); // Увеличен лимит для API v2
-    }
-    
-    /**
-     * Полная генерация нормализованного ключа кэша
+     * Полная генерация ключа кэша
      */
     private function generateCacheKey($googleUrl) {
-        $fontFormat = $this->detectFontExtension();
-        $shortLang = $this->getAcceptLanguage(); // Теперь возвращает короткий код языка
+        // Используем только User-Agent для кэширования CSS
+        $userAgentFormat = $this->detectFontExtension();
+        $shortLang = $this->getAcceptLanguage();
         
-        // Дополнительная нормализация URL для лучшего кэширования
-        $normalizedUrl = $this->normalizeGoogleFontsUrl($googleUrl);
-        
-        return md5($normalizedUrl . $fontFormat . $shortLang);
-    }
-
-    private function normalizeGoogleFontsUrl($url) {
-        $parsed = parse_url($url);
-        if (!$parsed || !isset($parsed['query'])) {
-            return $url;
-        }
-        
-        parse_str($parsed['query'], $params);
-        
-        // Сортировка параметров для консистентного кэширования
-        ksort($params);
-        
-        // Нормализация family параметров
-        if (isset($params['family'])) {
-            if (is_array($params['family'])) {
-                sort($params['family']);
-            }
-        }
-        
-        $normalizedQuery = http_build_query($params);
-        
-        return $parsed['scheme'] . '://' . $parsed['host'] . $parsed['path'] . '?' . $normalizedQuery;
+        return md5($googleUrl . $userAgentFormat . $shortLang);
     }
       
     private function fetchGoogleCSS($url) {
@@ -580,29 +332,21 @@ class GoogleFontsProxy {
     
     private function processCSS($css) {
         static $fontUrlPattern = null;
-        static $fontUrlPatternV2 = null;
         
         if ($fontUrlPattern === null) {
+            // паттерны - оба должны использовать gstatic.com
             $fontUrlPattern = '/url\s*\(\s*(["\']?)(https?:\/\/fonts\.gstatic\.com\/[^)"\'\s]+)\1\s*\)/i';
-            $fontUrlPatternV2 = '/url\s*\(\s*(["\']?)(https?:\/\/fonts\.googleapis\.com\/[^)"\'\s]+)\1\s*\)/i';
         }
         
-        // Собираем все URL из обоих паттернов
-        preg_match_all($fontUrlPattern, $css, $matches1);
-        preg_match_all($fontUrlPatternV2, $css, $matches2);
-        
-        $fontUrls = array_unique(array_merge(
-            $matches1[2] ?? [],
-            $matches2[2] ?? []
-        ));
+        preg_match_all($fontUrlPattern, $css, $matches);
+        $fontUrls = array_unique($matches[2] ?? []);
         
         if (empty($fontUrls)) {
             return $css;
         }
         
-        // НОВАЯ ЛОГИКА: Параллельная обработка шрифтов
-        $replacements = $this->processFontsParallel($fontUrls);
-        
+        // Передаем CSS context для лучшего определения формата
+        $replacements = $this->processFontsParallel($fontUrls, $css);
         $css = $this->replaceUrlsInCSS($css, $replacements);
         $css = $this->addCSSMetadata($css, count($replacements));
         
@@ -613,54 +357,47 @@ class GoogleFontsProxy {
      * Параллельная обработка множественных шрифтов
      * Использует cURL Multi для одновременной загрузки + существующую систему блокировок
      */
-    private function processFontsParallel($fontUrls) {
+    private function processFontsParallel($fontUrls, $cssContext = '') {
         $replacements = [];
         $downloadQueue = [];
         $existingFonts = [];
         
-        // Этап 1: Быстрая проверка существующих файлов и подготовка к загрузке
         foreach ($fontUrls as $fontUrl) {
             try {
-                $fileName = $this->generateFontFileName($fontUrl);
+                // Передаем CSS context для определения формата
+                $fileName = $this->generateFontFileName($fontUrl, $cssContext);
                 $localPath = $this->fontsDir . $fileName;
                 $fontPath = FONTS_WEB_PATH . $fileName;
                 $localUrl = $fontPath;
                 
-                // Проверяем существование без блокировки (быстро)
                 if ($this->isFileValidAndFresh($localPath)) {
                     $replacements[$fontUrl] = $localUrl;
                     $existingFonts[] = $fontUrl;
                     continue;
                 }
                 
-                // Добавляем в очередь загрузки
                 $downloadQueue[$fontUrl] = [
                     'fileName' => $fileName,
                     'localPath' => $localPath,
                     'localUrl' => $localUrl,
                     'lockFile' => $this->fontsDir . self::LOCK_FILE_PREFIX . $fileName
                 ];
-                
             } catch (Exception $e) {
                 error_log('Ошибка подготовки шрифта ' . $fontUrl . ': ' . $e->getMessage());
             }
         }
         
-        // Этап 2: Получение блокировок для файлов, требующих загрузки
         $lockedDownloads = [];
         $lockHandles = [];
         
         foreach ($downloadQueue as $fontUrl => $fontData) {
-            // Повторная проверка после подготовки очереди
             if ($this->isFileValidAndFresh($fontData['localPath'])) {
                 $replacements[$fontUrl] = $fontData['localUrl'];
                 continue;
             }
             
-            // Пытаемся получить блокировку
             $lockHandle = $this->acquireExclusiveLock($fontData['lockFile']);
             if ($lockHandle) {
-                // Третья проверка после получения блокировки
                 if ($this->isFileValidAndFresh($fontData['localPath'])) {
                     $replacements[$fontUrl] = $fontData['localUrl'];
                     $this->releaseLock($lockHandle, $fontData['lockFile']);
@@ -670,8 +407,6 @@ class GoogleFontsProxy {
                 $lockHandles[$fontUrl] = $lockHandle;
                 $lockedDownloads[$fontUrl] = $fontData;
             } else {
-                // Если не удалось получить блокировку, возможно файл уже загружается
-                // Последняя попытка проверить файл
                 if ($this->isFileValidAndFresh($fontData['localPath'])) {
                     $replacements[$fontUrl] = $fontData['localUrl'];
                 } else {
@@ -680,11 +415,9 @@ class GoogleFontsProxy {
             }
         }
         
-        // Этап 3: Параллельная загрузка заблокированных файлов
         if (!empty($lockedDownloads)) {
             try {
                 $downloadResults = $this->downloadFontsParallel($lockedDownloads);
-                
                 foreach ($downloadResults as $fontUrl => $success) {
                     if ($success && isset($lockedDownloads[$fontUrl])) {
                         $replacements[$fontUrl] = $lockedDownloads[$fontUrl]['localUrl'];
@@ -692,12 +425,10 @@ class GoogleFontsProxy {
                         error_log('Неудачная загрузка шрифта: ' . $fontUrl);
                     }
                 }
-                
             } catch (Exception $e) {
                 error_log('Ошибка параллельной загрузки: ' . $e->getMessage());
             }
             
-            // Освобождаем все блокировки
             foreach ($lockHandles as $fontUrl => $lockHandle) {
                 if (isset($lockedDownloads[$fontUrl])) {
                     $this->releaseLock($lockHandle, $lockedDownloads[$fontUrl]['lockFile']);
@@ -858,68 +589,36 @@ class GoogleFontsProxy {
         return $css;
     }
     
-    private function processFontSafe($fontUrl) {
-        $parsedUrl = parse_url($fontUrl);
-        if (!$parsedUrl || empty($parsedUrl['path'])) {
-            throw new Exception('Неверный URL шрифта: ' . $fontUrl);
-        }
-        
-        $fileName = $this->generateFontFileName($fontUrl);
-        $localPath = $this->fontsDir . $fileName;
-        $lockFile = $this->fontsDir . self::LOCK_FILE_PREFIX . $fileName;
-        
-        $fontPath = FONTS_WEB_PATH . $fileName;
-        // $localUrl = $this->baseUrl . $fontPath;
-        $localUrl = $fontPath;
-        
-        // Проверяем существование файла с блокировкой
-        if ($this->isFileValidAndFresh($localPath)) {
-            return $localUrl;
-        }
-        
-        // Получаем эксклюзивную блокировку для скачивания
-        $lockHandle = $this->acquireExclusiveLock($lockFile);
-        if (!$lockHandle) {
-            // Если не удалось получить блокировку, проверяем еще раз файл
-            // (возможно, другой процесс уже скачал)
-            if ($this->isFileValidAndFresh($localPath)) {
-                return $localUrl;
-            }
-            throw new Exception('Не удалось получить блокировку для шрифта: ' . $fontUrl);
-        }
-        
-        try {
-            // Двойная проверка после получения блокировки
-            if ($this->isFileValidAndFresh($localPath)) {
-                return $localUrl;
-            }
-            
-            // Скачиваем шрифт атомарно
-            if (!$this->downloadFontAtomic($fontUrl, $localPath)) {
-                throw new Exception('Не удалось загрузить шрифт: ' . $fontUrl);
-            }
-            
-            return $localUrl;
-            
-        } finally {
-            $this->releaseLock($lockHandle, $lockFile);
-        }
-    }
-    
-    private function generateFontFileName($fontUrl) {
-        // Кэшируем сгенерированные имена файлов
+   
+    private function generateFontFileName($fontUrl, $cssContext = '') {
         if (isset(self::$memoryCache['fontFileNames'][$fontUrl])) {
             return self::$memoryCache['fontFileNames'][$fontUrl];
         }
         
-        $originalName = basename(parse_url($fontUrl, PHP_URL_PATH));
-        $extension = pathinfo($originalName, PATHINFO_EXTENSION);
+        // Извлекаем расширение из URL (приоритет)
+        $urlPath = parse_url($fontUrl, PHP_URL_PATH);
+        $originalName = basename($urlPath);
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        
+        // Если расширения нет в URL, пытаемся извлечь из CSS context
+        if (!$extension && !empty($cssContext)) {
+            $extension = $this->extractFontFormatFromCSS($cssContext, $fontUrl);
+        }
+        
+        // Fallback к User-Agent detection только если ничего не найдено
         if (!$extension) {
             $extension = $this->detectFontExtension();
         }
         
+        // Валидация расширения
+        $validExtensions = ['woff2', 'woff', 'ttf', 'eot', 'svg'];
+        if (!in_array($extension, $validExtensions)) {
+            $extension = 'woff2'; // безопасный fallback
+        }
+        
         $hash = substr(md5($fontUrl), 0, 8);
         $baseName = pathinfo($originalName, PATHINFO_FILENAME);
+        
         if (empty($baseName) || strlen($baseName) < 3) {
             $baseName = 'font_' . $hash;
         } else {
@@ -931,10 +630,33 @@ class GoogleFontsProxy {
         
         return $fileName;
     }
+
+    private function extractFontFormatFromCSS($css, $fontUrl) {
+        // Ищем format() директивы рядом с нашим URL
+        $escapedUrl = preg_quote($fontUrl, '/');
+        $pattern = '/url\s*\(\s*["\']?' . $escapedUrl . '["\']?\s*\)\s*format\s*\(\s*["\']?([^"\')\s]+)["\']?\s*\)/i';
+        
+        if (preg_match($pattern, $css, $matches)) {
+            $format = strtolower(trim($matches[1]));
+            
+            // Преобразуем format в расширение
+            $formatMap = [
+                'woff2' => 'woff2',
+                'woff' => 'woff',
+                'truetype' => 'ttf',
+                'opentype' => 'otf',
+                'embedded-opentype' => 'eot',
+                'svg' => 'svg'
+            ];
+            
+            return isset($formatMap[$format]) ? $formatMap[$format] : null;
+        }
+        
+        return null;
+    }
     
     /**
      * Определяет оптимальный формат шрифта на основе User-Agent
-     * версия с точной детекцией поддержки WOFF2
      */
     private function detectFontExtension() {
         static $cachedResult = null;
@@ -945,16 +667,12 @@ class GoogleFontsProxy {
         
         $userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? strtolower($_SERVER['HTTP_USER_AGENT']) : '';
         
-        // Если User-Agent пустой, возвращаем наиболее совместимый формат
         if (empty($userAgent)) {
-            $cachedResult = 'woff';
+            $cachedResult = 'woff2'; // современный fallback
             return $cachedResult;
         }
         
-        // Детальная проверка поддержки WOFF2
         $supportsWoff2 = $this->checkWoff2Support($userAgent);
-        
-        // Выбор оптимального формата
         $cachedResult = $supportsWoff2 ? 'woff2' : 'woff';
         
         return $cachedResult;
@@ -1537,31 +1255,14 @@ class GoogleFontsProxy {
         }
         
         $stats['total_size_mb'] = round($stats['total_size'] / (1024 * 1024), 2);
-        $stats['cache_hit_ratio'] = $this->calculateCacheHitRatio();
         
         return $stats;
     }  
     
 
-    /**
-     * Рассчитывает эффективность кэша
-     */
-    private function calculateCacheHitRatio() {
-        $cacheHits = 0;
-        $totalRequests = 0;
-        
-        // Простая эвристика на основе файлов в кэше
-        if (is_dir($this->cacheDir)) {
-            $cssFiles = glob($this->cacheDir . '*.css');
-            $cacheHits = count($cssFiles);
-            $totalRequests = max($cacheHits, 1); // Избегаем деления на ноль
-        }
-        
-        return round(($cacheHits / $totalRequests) * 100, 2);
-    }
 
     private function acquireExclusiveLock($lockFile) {
-        $maxAttempts = 10;
+        $maxAttempts = 30;
         $attempt = 0;
         
         while ($attempt < $maxAttempts) {
@@ -1596,6 +1297,14 @@ class GoogleFontsProxy {
     }
 
     private function isFileValidAndFresh($filePath) {
+        if (!file_exists($filePath)) {
+            if (isset(self::$fileValidationCache[$cacheKey])) {
+                self::$fileValidationCache[$cacheKey] = false;
+            }
+            
+            return false;
+        }
+        
         // Проверяем кэш валидации в памяти
         $cacheKey = $filePath . ':' . filemtime($filePath);
         if (isset(self::$fileValidationCache[$cacheKey])) {

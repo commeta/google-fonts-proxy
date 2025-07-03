@@ -16,7 +16,7 @@ const MAX_PARALLEL = 64; // Максимум одновременных соед
 const MAX_CSS_FILES = 1024;    // Максимальное количество CSS файлов в кэше
 const MAX_FONT_FILES = 8192;   // Максимальное количество файлов шрифтов в кэше
 
-const FONTS_FILES_MANIFEST = 'cache/fonts_manifest.json'; // Кастомный путь для файла манифест
+const FONTS_FILES_MANIFEST = 'cache/fonts_manifest.dat'; // Кастомный путь для файла манифест
 
 class GoogleFontsProxy {
     private $cacheDir;
@@ -206,7 +206,7 @@ class GoogleFontsProxy {
         }
         
         if(file_exists(FONTS_FILES_MANIFEST)) {
-            $font_files_set = json_decode(file_get_contents(FONTS_FILES_MANIFEST), true);
+            $font_files_set = unserialize(file_get_contents(FONTS_FILES_MANIFEST));
         } else {
             $font_files_set = $this->getFontFilesSet();
         }
@@ -258,7 +258,7 @@ class GoogleFontsProxy {
         closedir($handle);
         
         try {
-            if (file_put_contents(FONTS_FILES_MANIFEST, json_encode($files, JSON_UNESCAPED_SLASHES), LOCK_EX) === false) {
+            if (file_put_contents(FONTS_FILES_MANIFEST, serialize($files), LOCK_EX) === false) {
                 throw new Exception('Не удалось записать файл списка файлов шрифтов');
             }
             

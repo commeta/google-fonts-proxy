@@ -134,21 +134,30 @@ class GoogleFontsProxy {
 
             try {
                 if ($this->isCSSCacheValid($cacheFile)) {
-                    $this->outputCachedCSS($cacheFile);
-                    return;
+                    try {
+                        $this->outputCachedCSS($cacheFile);
+                        return;
+                    } catch (Exception $fontException) {
+                        // Если проблема с шрифтами, продолжаем обработку как при холодном кэше
+                        error_log('Font validation failed, reprocessing: ' . $fontException->getMessage());
+                        // Не возвращаемся, продолжаем выполнение для перезагрузки
+                    }
                 }
-
+                
                 $css = $this->fetchGoogleCSS($googleUrl);
                 if ($css === false) {
                     throw new Exception('Не удалось получить CSS от Google Fonts');
                 }
-
+                
                 $processedCSS = $this->processCSS($css);
                 $this->saveCSSAtomic($cacheFile, $processedCSS);
                 $this->outputCSS($processedCSS);
+                
             } finally {
                 $this->releaseLock($lockHandle, $lockFile);
             }
+            
+            
         } catch (Exception $e) {
             $this->handleError($e);
         }
@@ -168,14 +177,67 @@ class GoogleFontsProxy {
      */
     private function outputCachedCSS($cacheFile) {
         $css = file_get_contents($cacheFile);
-        if ($css !== false) {
-            $this->outputCSS($css);
-        } else {
-            // Если не удалось прочитать кэш, удаляем поврежденный файл
+        if ($css === false) {
             @unlink($cacheFile);
             throw new Exception('Поврежденный файл кэша');
         }
+        
+        // Быстрая проверка существования файлов шрифтов
+        if (!$this->validateFontFilesInCSS($css)) {
+            // Если шрифты отсутствуют, удаляем CSS кэш и перезапускаем обработку
+            @unlink($cacheFile);
+            throw new Exception('Отсутствуют файлы шрифтов, требуется перезагрузка');
+        }
+        
+        $this->outputCSS($css);
     }
+
+    /**
+     * проверка существования файлов шрифтов в кэшированном CSS
+     * Извлекает пути к шрифтам из CSS и проверяет их существование
+     */
+    private function validateFontFilesInCSS($css) {
+        // Быстрое извлечение имен файлов шрифтов из CSS
+        $fontFiles = $this->extractFontFilesFromCSS($css);
+        
+        if (empty($fontFiles)) {
+            return true; // Нет шрифтов для проверки
+        }
+
+        // Проверяем существование каждого файла шрифта
+        foreach ($fontFiles as $fontFile) {
+            if (!file_exists(CACHE_FONTS_DIR . $fontFile)) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+
+    /**
+     * извлечение имен файлов шрифтов из CSS
+     * Ищет только локальные пути к шрифтам (наш кэш)
+     */
+    private function extractFontFilesFromCSS($css) {
+        $fontFiles = [];
+        
+        // Регулярное выражение для поиска локальных путей к шрифтам
+        $webPath = preg_quote(FONTS_WEB_PATH, '/');
+        $pattern = '/url\s*\(\s*["\']?' . $webPath . '([^"\')\s]+)["\']?\s*\)/i';
+        
+        if (preg_match_all($pattern, $css, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $fileName = $match[1];
+                if (!empty($fileName) && !in_array($fileName, $fontFiles)) {
+                    $fontFiles[] = $fileName;
+                }
+            }
+        }
+        
+        return $fontFiles;
+    }
+
         
 
     /**

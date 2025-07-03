@@ -370,41 +370,41 @@ Cache-Control: public, max-age=31536000  (1 год для шрифтов)
 
 ### Поддерживаемые параметры
 
-- `family` - название и стили шрифта
-- `subset` - языковые подмножества
-- `display` - свойство font-display
-- `text` - оптимизация для конкретного текста
+- api=1 - для первой версии https://fonts.googleapis.com/css
+- api=2 - для второй версии https://fonts.googleapis.com/css2
+- По умолчанию установлена первая версия api
+
 
 ### Примеры использования
 
 **V1 API**
 ```html
 <!-- Один шрифт -->
-<link href="/fonts-proxy.php?family=Roboto:400,700" rel="stylesheet">
+<link href="/fonts-proxy.php?api=1&family=Roboto:400,700" rel="stylesheet">
 
 <!-- Несколько шрифтов -->
-<link href="/fonts-proxy.php?family=Roboto:400,700|Open+Sans:300,400" rel="stylesheet">
+<link href="/fonts-proxy.php?api=1&family=Roboto:400,700|Open+Sans:300,400" rel="stylesheet">
 
 <!-- С дополнительными параметрами -->
-<link href="/fonts-proxy.php?family=Roboto:400&display=swap&subset=latin,cyrillic" rel="stylesheet">
+<link href="/fonts-proxy.php?api=1&family=Roboto:400&display=swap&subset=latin,cyrillic" rel="stylesheet">
 ```
 
 **V2 API**
 ```html
 <!-- 1) Базовый v2: вес через wght@ -->
-<link href="/fonts-proxy.php?family=Roboto:wght@400;700" rel="stylesheet">
+<link href="/fonts-proxy.php?api=2&family=Roboto:wght@400;700" rel="stylesheet">
 
 <!-- 2) Italic + weight: ital,wght@0,400;1,700 -->
-<link href="/fonts-proxy.php?family=Open+Sans:ital,wght@0,300;0,400;1,400;1,700" rel="stylesheet">
+<link href="/fonts-proxy.php?api=2&family=Open+Sans:ital,wght@0,300;0,400;1,400;1,700" rel="stylesheet">
 
 <!-- 3) Переменные шрифты (variable font) с осями -->
-<link href="/fonts-proxy.php?family=Roboto+Flex:opsz,wght@8..144,100..900" rel="stylesheet">
+<link href="/fonts-proxy.php?api=2&family=Roboto+Flex:opsz,wght@8..144,100..900" rel="stylesheet">
 
 <!-- 4) С display, текстовым ограничением и subset -->
-<link href="/fonts-proxy.php?family=Montserrat:wght@400;600&display=swap&text=Hello%20World!&subset=latin-ext" rel="stylesheet">
+<link href="/fonts-proxy.php?api=2&family=Montserrat:wght@400;600&display=swap&text=Hello%20World!&subset=latin-ext" rel="stylesheet">
 
 <!-- 5) Мультяшрифты с разными семействами через v2 -->
-<link href="/fonts-proxy.php?family=Roboto+Slab:wght@300;600&family=Lato:ital,wght@0,400;1,700&display=swap" rel="stylesheet">
+<link href="/fonts-proxy.php?api=2&family=Roboto+Slab:wght@300;600&family=Lato:ital,wght@0,400;1,700&display=swap" rel="stylesheet">
 ```
 
 ## 🛠️ Административные команды

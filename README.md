@@ -418,7 +418,8 @@ const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для к
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
 const MAX_PARALLEL = 64;                // Максимум одновременных соединений
 const MAX_CSS_FILES = 1024;             // Максимальное количество CSS файлов в кэше
-const MAX_FONT_FILES = 32768;           // Максимальное количество файлов шрифтов в кэше
+const MAX_FONT_FILES = 8192;            // Максимальное количество файлов шрифтов в кэше
+const FONTS_FILES_MANIFEST = 'cache/fonts_manifest.dat'; // Кастомный путь для файла манифест
 ```
 
 Вы можете изменить следующие параметры в классе `GoogleFontsProxy`:

@@ -326,7 +326,7 @@ Cache-Control: public, max-age=31536000  (1 год для шрифтов)
 
 ## 📋 Требования
 
-- PHP 7.4 или выше
+- PHP 7.0 или выше
 - Расширения: `curl` (рекомендуется) или `allow_url_fopen`
 - Права на запись в директорию скрипта
 - SSL поддержка для HTTPS соединений
@@ -407,68 +407,6 @@ Cache-Control: public, max-age=31536000  (1 год для шрифтов)
 <link href="/fonts-proxy.php?api=2&family=Roboto+Slab:wght@300;600&family=Lato:ital,wght@0,400;1,700&display=swap" rel="stylesheet">
 ```
 
-## 🛠️ Административные команды
-
-### Очистка кэша
-
-```bash
-curl "https://yourdomain.com/fonts-proxy.php?action=clear_cache"
-```
-
-Ответ:
-```
-Cache cleared. Files removed: 25
-```
-
-### Отладка производительности
-
-```bash
-curl "https://yourdomain.com/fonts-proxy.php?action=debug_performance"
-```
-
-Пример ответа:
-```json
-{
-    "memory_cache_size": 3,
-    "memory_usage": 2097152,
-    "memory_peak": 2097152,
-    "cache_dir_exists": true,
-    "fonts_dir_exists": true,
-    "css_cache_files": 11,
-    "font_cache_files": 63,
-    "cache_normalization": "enabled",
-    "detected_font_format": "woff2",
-    "cache_stats": {
-        "css_files": 11,
-        "font_files": 63,
-        "total_size": 1693255,
-        "cache_efficiency": "improved",
-        "api_v2_support": true,
-        "total_size_mb": 1.61
-    },
-    "curl_multi_support": true,
-    "download_method": "curl_multi"
-}
-```
-
-### Статистика кэша
-
-```bash
-curl "https://yourdomain.com/fonts-proxy.php?action=cache_stats"
-```
-
-Пример ответа:
-```json
-{
-    "css_files": 11,
-    "font_files": 63,
-    "total_size": 1693255,
-    "cache_efficiency": "improved",
-    "api_v2_support": true,
-    "total_size_mb": 1.61
-}
-```
-
 ## ⚙️ Конфигурация
 
 ### Основные настройки
@@ -482,7 +420,8 @@ const CACHE_FONTS_DIR = 'cache/fonts/'; // Кастомный путь для к
 const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстановки в CSS
 const ADMIN_ACTIONS = false;            // Административные команды
 const MAX_PARALLEL = 32;                // Максимум одновременных соединений
-
+const MAX_CSS_FILES = 1000;    // Максимальное количество CSS файлов в кэше
+const MAX_FONT_FILES = 5000;   // Максимальное количество файлов шрифтов в кэше
 ```
 
 Вы можете изменить следующие параметры в классе `GoogleFontsProxy`:
@@ -620,23 +559,11 @@ ini_set('error_log', '/path/to/error.log');
 # Просмотр ошибок
 tail -f /var/log/apache2/error.log | grep "Google Fonts Proxy"
 
-# Статистика кэша
-curl -s "https://yourdomain.com/fonts-proxy.php?action=cache_stats" | jq '.'
-
 # Размер кэша
 du -sh cache/
 
 # Количество файлов
 find cache/ -type f | wc -l
-```
-
-### Автоматическая очистка кэша (опционально)
-
-Добавьте в crontab для автоматической очистки устаревших файлов:
-
-```bash
-# Очистка кэша каждую неделю
-0 3 * * 0 /usr/bin/curl -s "https://yourdomain.com/fonts-proxy.php?action=clear_cache" > /dev/null
 ```
 
 ## 🔒 Безопасность
@@ -647,24 +574,7 @@ find cache/ -type f | wc -l
 - ✅ Проверка SSL сертификатов
 - ✅ Безопасная работа с временными файлами
 - ✅ Race Condition при создании файлов кэша
-
-
-### Дополнительные рекомендации
-
-```apache
-# Защита административных команд (Apache)
-<FilesMatch "fonts-proxy\.php">
-    <RequireAll>
-        Require local
-        # или Require ip 192.168.1.0/24
-    </RequireAll>
-    SetEnvIf Query_String "action=" admin_access
-    <RequireAll>
-        Require env admin_access
-        Require local
-    </RequireAll>
-</FilesMatch>
-```
+- ✅ Эффективная ротация: Удаляет самые старые файлы при превышении лимита
 
 
 ## Принцип работы Google Fonts Proxy:

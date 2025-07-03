@@ -14,6 +14,10 @@ const FONTS_WEB_PATH = '/cache/fonts/'; // URL-путь для подстано�
 const ADMIN_ACTIONS = true; // Административные команды
 const MAX_PARALLEL = 32; // Максимум одновременных соединений
 
+const MAX_CSS_FILES = 1000;    // Максимальное количество CSS файлов в кэше
+const MAX_FONT_FILES = 5000;   // Максимальное количество файлов шрифтов в кэше
+
+
 class GoogleFontsProxy {
     private $cacheDir;
     private $fontsDir;
@@ -28,6 +32,8 @@ class GoogleFontsProxy {
     private static $memoryCache = [];
        
     private static $fileValidationCache = [];
+    
+    private static $rotationPerformed = false;  // Флаг выполнения ротации в текущем запросе
     
     public function __construct() {
         // Директории для кэша с использованием констант
@@ -1109,111 +1115,8 @@ class GoogleFontsProxy {
         $protocol = $this->isHttps() ? 'https' : 'http';
         return $protocol . '://' . $_SERVER['HTTP_HOST'] . '/';
     }
-    
-    public function clearCache() {
-        $cleared = 0;
         
-        // Очищаем CSS кэш
-        if (is_dir($this->cacheDir)) {
-            $files = array_merge(
-                glob($this->cacheDir . '*.css'),
-                glob($this->cacheDir . self::TEMP_FILE_PREFIX . '*'),
-                glob($this->cacheDir . self::LOCK_FILE_PREFIX . '*')
-            );
-            
-            foreach ($files as $file) {
-                if (is_file($file)) {
-                    // Проверяем блокировки перед удалением
-                    if (strpos(basename($file), self::LOCK_FILE_PREFIX) === 0) {
-                        // Проверяем, не активна ли блокировка
-                        $handle = @fopen($file, 'r');
-                        if ($handle) {
-                            if (flock($handle, LOCK_EX | LOCK_NB)) {
-                                flock($handle, LOCK_UN);
-                                fclose($handle);
-                                if (unlink($file)) {
-                                    $cleared++;
-                                }
-                            } else {
-                                fclose($handle);
-                                // Файл заблокирован, пропускаем
-                            }
-                        }
-                    } else {
-                        if (unlink($file)) {
-                            $cleared++;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Очищаем кэш шрифтов
-        if (is_dir($this->fontsDir)) {
-            $files = array_merge(
-                glob($this->fontsDir . '*'),
-                glob($this->fontsDir . self::TEMP_FILE_PREFIX . '*'),
-                glob($this->fontsDir . self::LOCK_FILE_PREFIX . '*')
-            );
-            
-            foreach ($files as $file) {
-                if (is_file($file)) {
-                    $shouldDelete = false;
-                    
-                    if (strpos(basename($file), self::LOCK_FILE_PREFIX) === 0) {
-                        // Проверяем блокировки
-                        $handle = @fopen($file, 'r');
-                        if ($handle) {
-                            if (flock($handle, LOCK_EX | LOCK_NB)) {
-                                flock($handle, LOCK_UN);
-                                fclose($handle);
-                                $shouldDelete = true;
-                            } else {
-                                fclose($handle);
-                            }
-                        }
-                    } else {
-                        // Обычные файлы удаляем если они старые
-                        $shouldDelete = (time() - filemtime($file)) > $this->maxCacheAge;
-                    }
-                    
-                    if ($shouldDelete && unlink($file)) {
-                        $cleared++;
-                    }
-                }
-            }
-        }
-        
-        // Очищаем кэш в памяти
-        self::$memoryCache = [];
-        
-        return $cleared;
-    }
-    
-    
-    /**
-     * Метод для отладки производительности
-     */
-    public function debugPerformance() {
-        $debug = [
-            'memory_cache_size' => count(self::$memoryCache, COUNT_RECURSIVE),
-            'memory_usage' => memory_get_usage(true),
-            'memory_peak' => memory_get_peak_usage(true),
-            'cache_dir_exists' => is_dir($this->cacheDir),
-            'fonts_dir_exists' => is_dir($this->fontsDir),
-            'css_cache_files' => count(glob($this->cacheDir . '*.css')),
-            'font_cache_files' => count(glob($this->fontsDir . '*')),
-            'cache_normalization' => 'enabled',
-            'detected_font_format' => $this->detectFontExtension(),
-            'cache_stats' => $this->getCacheStats(),
-            'curl_multi_support' => function_exists('curl_multi_init'),
-            'download_method' => function_exists('curl_multi_init') ? 'curl_multi' : 'sequential'            
-        ];
-        
-        return $debug;
-    }
-    
-    
+
     /**
      * Получает реальный User-Agent для запросов к Google (без нормализации)
      */
@@ -1222,44 +1125,6 @@ class GoogleFontsProxy {
                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
     }  
     
-    /**
-     * Показывает эффективность нормализации
-     */
-    public function getCacheStats() {
-        $stats = [
-            'css_files' => 0,
-            'font_files' => 0,
-            'total_size' => 0,
-            'cache_efficiency' => 'improved',
-            'api_v2_support' => true
-        ];
-        
-        if (is_dir($this->cacheDir)) {
-            $cssFiles = glob($this->cacheDir . '*.css');
-            $stats['css_files'] = count($cssFiles);
-            
-            foreach ($cssFiles as $file) {
-                $stats['total_size'] += filesize($file);
-            }
-        }
-        
-        if (is_dir($this->fontsDir)) {
-            $fontFiles = glob($this->fontsDir . '*');
-            $stats['font_files'] = count($fontFiles);
-            
-            foreach ($fontFiles as $file) {
-                if (is_file($file)) {
-                    $stats['total_size'] += filesize($file);
-                }
-            }
-        }
-        
-        $stats['total_size_mb'] = round($stats['total_size'] / (1024 * 1024), 2);
-        
-        return $stats;
-    }  
-    
-
 
     private function acquireExclusiveLock($lockFile) {
         $maxAttempts = 30;
@@ -1384,22 +1249,54 @@ class GoogleFontsProxy {
                 continue;
             }
             
-            $tempFiles = glob($dir . self::TEMP_FILE_PREFIX . '*');
+            // Быстрая очистка временных файлов
+            $this->cleanupTempFilesInDirectory($dir);
+            
+            // Быстрая очистка старых лок-файлов
+            $this->cleanupLockFilesInDirectory($dir);
+        }
+        
+        // Выполняем ротацию файлов только один раз за запрос
+        if (!self::$rotationPerformed) {
+            $this->performCacheRotation();
+            self::$rotationPerformed = true;
+        }
+    }
+
+
+    /**
+     * Быстрая очистка временных файлов в директории
+     */
+    private function cleanupTempFilesInDirectory($dir) {
+        $tempPattern = $dir . self::TEMP_FILE_PREFIX . '*';
+        $tempFiles = glob($tempPattern);
+        
+        if ($tempFiles) {
+            $currentTime = time();
             foreach ($tempFiles as $tempFile) {
                 if (is_file($tempFile)) {
-                    $age = time() - filemtime($tempFile);
-                    if ($age > 3600) { // Удаляем временные файлы старше часа
+                    $age = $currentTime - filemtime($tempFile);
+                    if ($age > 3600) { // 1 час
                         @unlink($tempFile);
                     }
                 }
             }
-            
-            // Очищаем старые lock файлы
-            $lockFiles = glob($dir . self::LOCK_FILE_PREFIX . '*');
+        }
+    }
+
+    /**
+     * Быстрая очистка лок-файлов в директории
+     */
+    private function cleanupLockFilesInDirectory($dir) {
+        $lockPattern = $dir . self::LOCK_FILE_PREFIX . '*';
+        $lockFiles = glob($lockPattern);
+        
+        if ($lockFiles) {
+            $currentTime = time();
             foreach ($lockFiles as $lockFile) {
                 if (is_file($lockFile)) {
-                    $age = time() - filemtime($lockFile);
-                    if ($age > 300) { // Удаляем lock файлы старше 5 минут
+                    $age = $currentTime - filemtime($lockFile);
+                    if ($age > 300) { // 5 минут
                         $handle = @fopen($lockFile, 'r');
                         if ($handle) {
                             if (flock($handle, LOCK_EX | LOCK_NB)) {
@@ -1415,84 +1312,91 @@ class GoogleFontsProxy {
             }
         }
     }
-}
 
-// Обработка административных действий
-if (isset($_GET['action'])) {
-    if(!ADMIN_ACTIONS) {
-        echo "Prohibition of use";
-        exit;
+    /**
+     * Выполняет ротацию файлов кэша при превышении лимитов
+     */
+    private function performCacheRotation() {
+        // Ротация CSS файлов
+        $this->rotateCacheFiles($this->cacheDir, '*.css', MAX_CSS_FILES);
+        
+        // Ротация файлов шрифтов
+        $this->rotateCacheFiles($this->fontsDir, '*', MAX_FONT_FILES);
+    }
+
+    /**
+     * Быстрая ротация файлов в директории
+     */
+    private function rotateCacheFiles($dir, $pattern, $maxFiles) {
+        if (!is_dir($dir)) {
+            return;
+        }
+        
+        // Используем быстрый подсчет файлов через glob
+        $files = glob($dir . $pattern);
+        if (!$files) {
+            return;
+        }
+        
+        // Фильтруем только обычные файлы, исключая временные и лок-файлы
+        $validFiles = [];
+        foreach ($files as $file) {
+            $basename = basename($file);
+            if (is_file($file) && 
+                strpos($basename, self::TEMP_FILE_PREFIX) !== 0 && 
+                strpos($basename, self::LOCK_FILE_PREFIX) !== 0) {
+                $validFiles[] = $file;
+            }
+        }
+        
+        $currentCount = count($validFiles);
+        
+        // Если превышен лимит, удаляем самые старые файлы
+        if ($currentCount > $maxFiles) {
+            $filesToDelete = $currentCount - $maxFiles;
+            
+            // Быстрая сортировка по времени модификации (самые старые первыми)
+            usort($validFiles, function($a, $b) {
+                return filemtime($a) - filemtime($b);
+            });
+            
+            // Удаляем самые старые файлы
+            for ($i = 0; $i < $filesToDelete; $i++) {
+                @unlink($validFiles[$i]);
+            }
+            
+            error_log("Google Fonts Proxy: Ротация кэша - удалено {$filesToDelete} файлов из {$dir}");
+        }
+    }
+
+    /**
+     * Быстрый подсчет файлов в директории (для отладки/мониторинга)
+     */
+    private function countFilesInDirectory($dir, $pattern = '*') {
+        if (!is_dir($dir)) {
+            return 0;
+        }
+        
+        $files = glob($dir . $pattern);
+        if (!$files) {
+            return 0;
+        }
+        
+        $count = 0;
+        foreach ($files as $file) {
+            $basename = basename($file);
+            if (is_file($file) && 
+                strpos($basename, self::TEMP_FILE_PREFIX) !== 0 && 
+                strpos($basename, self::LOCK_FILE_PREFIX) !== 0) {
+                $count++;
+            }
+        }
+        
+        return $count;
     }
     
-    switch ($_GET['action']) {
-        case 'clear_cache':
-            try {
-                $proxy = new GoogleFontsProxy();
-                $cleared = $proxy->clearCache();
-                
-                if (!headers_sent()) {
-                    header('Content-Type: text/plain; charset=utf-8');
-                }
-                
-                echo "Cache cleared. Files removed: " . $cleared;
-                exit;
-            } catch (Exception $e) {
-                error_log('Cache clear error: ' . $e->getMessage());
-                if (!headers_sent()) {
-                    http_response_code(500);
-                    header('Content-Type: text/plain; charset=utf-8');
-                }
-                echo "Error clearing cache: " . $e->getMessage();
-                exit;
-            }
-            break;
-            
-        case 'debug_performance':
-            try {
-                $proxy = new GoogleFontsProxy();
-                $debug = $proxy->debugPerformance();
-                
-                if (!headers_sent()) {
-                    header('Content-Type: application/json; charset=utf-8');
-                }
-                
-                echo json_encode($debug, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-                exit;
-            } catch (Exception $e) {
-                error_log('Debug error: ' . $e->getMessage());
-                if (!headers_sent()) {
-                    http_response_code(500);
-                    header('Content-Type: text/plain; charset=utf-8');
-                }
-                echo "Error in debug: " . $e->getMessage();
-                exit;
-            }
-            break;
-            
-        case 'cache_stats':
-            try {
-                $proxy = new GoogleFontsProxy();
-                $stats = $proxy->getCacheStats();
-                
-                if (!headers_sent()) {
-                    header('Content-Type: application/json; charset=utf-8');
-                }
-                
-                echo json_encode($stats, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-                exit;
-            } catch (Exception $e) {
-                error_log('Cache stats error: ' . $e->getMessage());
-                if (!headers_sent()) {
-                    http_response_code(500);
-                    header('Content-Type: text/plain; charset=utf-8');
-                }
-                echo "Error getting cache stats: " . $e->getMessage();
-                exit;
-            }
-            break;            
-            
-    }
 }
+
 
 // Обработка основного запроса
 try {

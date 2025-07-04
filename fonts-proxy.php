@@ -198,7 +198,7 @@ class GoogleFontsProxy {
 
         // Проверяем существование каждого файла шрифта
         foreach ($fontFiles as $fontFile) {
-            if (!file_exists(CACHE_FONTS_DIR . $fontFile)) {
+            if (!file_exists($this->fontsDir . $fontFile)) {
                 return false;
             }
         }
@@ -1412,12 +1412,12 @@ class GoogleFontsProxy {
             // Валидация файлов в CSS
             $files = $this->getCSSFilesSet();
             foreach ($files as $file) {
-                $css = file_get_contents(CACHE_CSS_DIR . $file);
+                $css = file_get_contents($this->cacheDir . $file);
             
                 // Быстрая проверка существования файлов шрифтов
                 if (!$this->validateFontFilesInCSS($css)) {
                     // Если шрифты отсутствуют, удаляем CSS кэш
-                    @unlink(CACHE_CSS_DIR . $file);
+                    @unlink($this->cacheDir . $file);
                 }
             }
         }

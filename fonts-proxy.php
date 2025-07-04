@@ -16,7 +16,6 @@ const MAX_PARALLEL = 64; // Максимум одновременных соед
 const MAX_CSS_FILES = 1024;    // Максимальное количество CSS файлов в кэше
 const MAX_FONT_FILES = 8192;   // Максимальное количество файлов шрифтов в кэше
 
-
 class GoogleFontsProxy {
     private $cacheDir;
     private $fontsDir;
@@ -1405,17 +1404,17 @@ class GoogleFontsProxy {
         $this->rotateCacheFiles($this->cacheDir, '*.css', MAX_CSS_FILES);
         
         // Ротация файлов шрифтов
-        $this->rotateCacheFiles($this->fontsDir, '*', MAX_FONT_FILES);
-        
-        // Валидация файлов в CSS
-        $files = $this->getCSSFilesSet();
-        foreach ($files as $file) {
-            $css = file_get_contents(CACHE_CSS_DIR . $file);
-        
-            // Быстрая проверка существования файлов шрифтов
-            if (!$this->validateFontFilesInCSS($css)) {
-                // Если шрифты отсутствуют, удаляем CSS кэш
-                @unlink(CACHE_CSS_DIR . $file);
+        if($this->rotateCacheFiles($this->fontsDir, '*', MAX_FONT_FILES)){
+            // Валидация файлов в CSS
+            $files = $this->getCSSFilesSet();
+            foreach ($files as $file) {
+                $css = file_get_contents(CACHE_CSS_DIR . $file);
+            
+                // Быстрая проверка существования файлов шрифтов
+                if (!$this->validateFontFilesInCSS($css)) {
+                    // Если шрифты отсутствуют, удаляем CSS кэш
+                    @unlink(CACHE_CSS_DIR . $file);
+                }
             }
         }
     }
@@ -1425,13 +1424,13 @@ class GoogleFontsProxy {
      */
     private function rotateCacheFiles($dir, $pattern, $maxFiles) {
         if (!is_dir($dir)) {
-            return;
+            return true;
         }
         
         // Используем быстрый подсчет файлов через glob
         $files = glob($dir . $pattern);
         if (!$files) {
-            return;
+            return true;
         }
         
         // Фильтруем только обычные файлы, исключая временные и лок-файлы
@@ -1460,7 +1459,11 @@ class GoogleFontsProxy {
             for ($i = 0; $i < $filesToDelete; $i++) {
                 @unlink($validFiles[$i]);
             }
+            
+            return true;
         }
+        
+        return false;
     }    
 }
 

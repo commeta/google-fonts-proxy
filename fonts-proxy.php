@@ -101,7 +101,7 @@ class GoogleFontsProxy {
                 throw new Exception('Не переданы параметры для Google Fonts');
             }
             
-            $qs= $this->maybeRawUrlDecode($_SERVER['QUERY_STRING']);
+            $qs= $this->maybeRawUrlDecode(substr(trim($_SERVER['QUERY_STRING']), 0, 1024));
 
             if (preg_match('/(?:^|&)api=(\d+)(?:&|$)/', $qs, $m)) {
                 $api = (int)$m[1];
@@ -479,6 +479,8 @@ class GoogleFontsProxy {
             }
         }
         
+        
+        
         $lockedDownloads = [];
         $lockHandles = [];
         
@@ -683,6 +685,7 @@ class GoogleFontsProxy {
     
    
     private function generateFontFileName($fontUrl, $cssContext = '') {
+		
         if (isset(self::$memoryCache['fontFileNames'][$fontUrl])) {
             return self::$memoryCache['fontFileNames'][$fontUrl];
         }

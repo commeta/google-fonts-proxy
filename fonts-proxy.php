@@ -450,6 +450,7 @@ class GoogleFontsProxy {
      * Использует cURL Multi для одновременной загрузки + существующую систему блокировок
      */
     private function processFontsParallel($fontUrls, $cssContext = '') {
+		
         $replacements = [];
         $downloadQueue = [];
         $existingFonts = [];
@@ -711,14 +712,12 @@ class GoogleFontsProxy {
             $extension = 'woff2'; // безопасный fallback
         }
         
-        
         $baseName = pathinfo($originalName, PATHINFO_FILENAME);
         
         if (empty($baseName) || strlen($baseName) < 3) {
 			$hash = substr(md5($fontUrl), 0, 8);
             $baseName = 'font_' . $hash;
         } else {
-			
             $baseName = $this->sanitizeFileName($baseName);
         }
         
@@ -966,7 +965,7 @@ class GoogleFontsProxy {
         $fileName = preg_replace('/[^a-zA-Z0-9\-_]/', '_', $fileName);
         $fileName = preg_replace('/_+/', '_', $fileName);
         $fileName = trim($fileName, '_');
-        return substr($fileName, 0, 50);
+        return substr($fileName, 0, 250);
     }
     
     private function downloadFontAtomic($url, $localPath) {

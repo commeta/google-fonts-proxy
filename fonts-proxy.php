@@ -16,7 +16,6 @@ const MAX_PARALLEL = 64; // Максимум одновременных соед
 const MAX_CSS_FILES = 1024;    // Максимальное количество CSS файлов в кэше
 const MAX_FONT_FILES = 8192;   // Максимальное количество файлов шрифтов в кэше
 
-const FONTS_FILES_MANIFEST = 'cache/fonts_manifest.dat'; // Кастомный путь для файла манифест
 
 class GoogleFontsProxy {
     private $cacheDir;
@@ -153,7 +152,6 @@ class GoogleFontsProxy {
                 $processedCSS = $this->processCSS($css);
                 $this->saveCSSAtomic($cacheFile, $processedCSS);
                 $this->outputCSS($processedCSS);
-                if(file_exists(FONTS_FILES_MANIFEST)) unlink(FONTS_FILES_MANIFEST);
             } finally {
                 $this->releaseLock($lockHandle, $lockFile);
             }
@@ -183,13 +181,6 @@ class GoogleFontsProxy {
             throw new Exception('Поврежденный файл кэша');
         }
         
-        // Быстрая проверка существования файлов шрифтов
-        if (!$this->validateFontFilesInCSS($css)) {
-            // Если шрифты отсутствуют, удаляем CSS кэш и перезапускаем обработку
-            @unlink($cacheFile);
-            throw new Exception('Отсутствуют файлы шрифтов, требуется перезагрузка');
-        }
-        
         $this->outputCSS($css);
     }
 
@@ -202,18 +193,13 @@ class GoogleFontsProxy {
         $fontFiles = $this->extractFontFilesFromCSS($css);
         
         if (empty($fontFiles)) {
-            return true; // Нет шрифтов для проверки
+            return false; // Нет шрифтов для проверки
         }
         
-        if(file_exists(FONTS_FILES_MANIFEST)) {
-            $font_files_set = unserialize(file_get_contents(FONTS_FILES_MANIFEST));
-        } else {
-            $font_files_set = $this->getFontFilesSet();
-        }
 
         // Проверяем существование каждого файла шрифта
         foreach ($fontFiles as $fontFile) {
-            if (!isset($font_files_set[$fontFile])) {
+            if (!file_exists(CACHE_FONTS_DIR . $fontFile)) {
                 return false;
             }
         }
@@ -223,10 +209,10 @@ class GoogleFontsProxy {
 
 
     /**
-     * Получает быстрый набор (set) всех файлов шрифтов в кэше
+     * Получает быстрый набор (set) всех файлов CSS в кэше
      * Использует array_flip для O(1) поиска по ключу
      */
-    private function getFontFilesSet() {
+    private function getCSSFilesSet() {
         if (!is_dir($this->fontsDir)) {
             return [];
         }
@@ -256,18 +242,6 @@ class GoogleFontsProxy {
         }
         
         closedir($handle);
-        
-        try {
-            if (file_put_contents(FONTS_FILES_MANIFEST, serialize($files), LOCK_EX) === false) {
-                throw new Exception('Не удалось записать файл списка файлов шрифтов');
-            }
-            
-            @chmod(FONTS_FILES_MANIFEST, 0644);
-            
-        } catch (Exception $e) {
-            @unlink(FONTS_FILES_MANIFEST);
-            throw $e;
-        }
         
         return $files;
     }
@@ -1436,6 +1410,19 @@ class GoogleFontsProxy {
         
         // Ротация файлов шрифтов
         $this->rotateCacheFiles($this->fontsDir, '*', MAX_FONT_FILES);
+        
+        // Валидация файлов в CSS
+        $files = $this->getCSSFilesSet();
+        
+        foreach ($files as $file) {
+			$css = file_get_contents(CACHE_CSS_DIR . $file);
+        
+			// Быстрая проверка существования файлов шрифтов
+			if (!$this->validateFontFilesInCSS($css)) {
+				// Если шрифты отсутствуют, удаляем CSS кэш
+				@unlink(CACHE_CSS_DIR . $file);
+			}
+		}
     }
 
     /**

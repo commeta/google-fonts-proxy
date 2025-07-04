@@ -213,12 +213,12 @@ class GoogleFontsProxy {
      * Использует array_flip для O(1) поиска по ключу
      */
     private function getCSSFilesSet() {
-        if (!is_dir($this->fontsDir)) {
+        if (!is_dir($this->cacheDir)) {
             return [];
         }
         
         $files = [];
-        $handle = opendir($this->fontsDir);
+        $handle = opendir($this->cacheDir);
         
         if ($handle === false) {
             return [];

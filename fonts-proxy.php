@@ -212,10 +212,6 @@ class GoogleFontsProxy {
      * Получает быстрый набор (set) всех файлов CSS в кэше
      */
     private function getCSSFilesSet() {
-        if (!is_dir($this->cacheDir)) {
-            return [];
-        }
-        
         $files = [];
         $handle = opendir($this->cacheDir);
         
@@ -1304,7 +1300,8 @@ class GoogleFontsProxy {
         
         // Проверяем возраст
         $age = time() - $stat['mtime'];
-        return $age < $this->maxCacheAge && is_readable($cacheFile);
+        // return $age < $this->maxCacheAge && is_readable($cacheFile);
+        return $age < $this->maxCacheAge;
     }
 
     private function saveCSSAtomic($cacheFile, $css) {

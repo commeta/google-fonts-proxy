@@ -711,13 +711,15 @@ class GoogleFontsProxy {
             $extension = 'woff2'; // безопасный fallback
         }
         
-        $hash = substr(md5($fontUrl), 0, 8);
+        
         $baseName = pathinfo($originalName, PATHINFO_FILENAME);
         
         if (empty($baseName) || strlen($baseName) < 3) {
+			$hash = substr(md5($fontUrl), 0, 8);
             $baseName = 'font_' . $hash;
         } else {
-            $baseName = $this->sanitizeFileName($baseName) . '_' . $hash;
+			
+            $baseName = $this->sanitizeFileName($baseName);
         }
         
         $fileName = $baseName . '.' . $extension;

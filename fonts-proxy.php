@@ -210,7 +210,6 @@ class GoogleFontsProxy {
 
     /**
      * Получает быстрый набор (set) всех файлов CSS в кэше
-     * Использует array_flip для O(1) поиска по ключу
      */
     private function getCSSFilesSet() {
         if (!is_dir($this->cacheDir)) {
@@ -236,7 +235,7 @@ class GoogleFontsProxy {
                 
                 $fullPath = $this->cacheDir . $file;
                 if (is_file($fullPath) && filesize($fullPath) > 0) {
-                    $files[$file] = true; // Используем ключ для быстрого поиска
+                    $files[] = $file;
                 }
             }
         }
@@ -1413,9 +1412,8 @@ class GoogleFontsProxy {
         
         // Валидация файлов в CSS
         $files = $this->getCSSFilesSet();
-        foreach ($files as $file=>$v) {
+        foreach ($files as $file) {
             $css = file_get_contents(CACHE_CSS_DIR . $file);
-            
         
             // Быстрая проверка существования файлов шрифтов
             if (!$this->validateFontFilesInCSS($css)) {

@@ -245,7 +245,7 @@ class GoogleFontsProxy {
         
         return $files;
     }
-
+    
     /**
      * извлечение имен файлов шрифтов из CSS
      * Ищет только локальные пути к шрифтам (наш кэш)
@@ -1413,16 +1413,16 @@ class GoogleFontsProxy {
         
         // Валидация файлов в CSS
         $files = $this->getCSSFilesSet();
+        foreach ($files as $file=>$v) {
+            $css = file_get_contents(CACHE_CSS_DIR . $file);
+            
         
-        foreach ($files as $file) {
-			$css = file_get_contents(CACHE_CSS_DIR . $file);
-        
-			// Быстрая проверка существования файлов шрифтов
-			if (!$this->validateFontFilesInCSS($css)) {
-				// Если шрифты отсутствуют, удаляем CSS кэш
-				@unlink(CACHE_CSS_DIR . $file);
-			}
-		}
+            // Быстрая проверка существования файлов шрифтов
+            if (!$this->validateFontFilesInCSS($css)) {
+                // Если шрифты отсутствуют, удаляем CSS кэш
+                @unlink(CACHE_CSS_DIR . $file);
+            }
+        }
     }
 
     /**

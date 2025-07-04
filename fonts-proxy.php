@@ -234,7 +234,7 @@ class GoogleFontsProxy {
             if (strpos($basename, self::TEMP_FILE_PREFIX) !== 0 && 
                 strpos($basename, self::LOCK_FILE_PREFIX) !== 0) {
                 
-                $fullPath = $this->fontsDir . $file;
+                $fullPath = $this->cacheDir . $file;
                 if (is_file($fullPath) && filesize($fullPath) > 0) {
                     $files[$file] = true; // Используем ключ для быстрого поиска
                 }
